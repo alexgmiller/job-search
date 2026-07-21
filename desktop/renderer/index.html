@@ -51,6 +51,15 @@
       border-color: #2f8ad6;
       color: #fff;
     }
+    #filter-row { padding: 0 16px 10px; }
+    #loc-filter {
+      width: 100%;
+      padding: 6px 10px;
+      border: 1px solid #d5d9df;
+      border-radius: 8px;
+      font-size: 12px;
+      background: #fff;
+    }
     #add-form {
       display: none;
       margin: 0 16px 10px;
@@ -77,6 +86,53 @@
     }
     #add-save { background: #2f8ad6; color: #fff; }
     #add-cancel { background: #eee; color: #444; }
+    #add-delete { background: #fdecea; color: #b00020; margin-right: auto; display: none; }
+    .apply-btn {
+      border: none;
+      background: #e7f3ec;
+      color: #1c7c43;
+      font-size: 11px;
+      padding: 5px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      margin-left: 8px;
+      flex-shrink: 0;
+    }
+    .apply-btn:hover { background: #d4eadd; }
+    .status-select {
+      font-size: 11px;
+      border: 1px solid #d5d9df;
+      border-radius: 6px;
+      padding: 3px 4px;
+      margin-left: 8px;
+      background: #fff;
+      flex-shrink: 0;
+    }
+    .notes-btn {
+      border: none;
+      background: #eee;
+      color: #555;
+      font-size: 11px;
+      padding: 5px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      margin-left: 6px;
+      flex-shrink: 0;
+    }
+    .notes-area {
+      width: 100%;
+      margin: 8px 0 0;
+      padding: 6px 8px;
+      border: 1px solid #d5d9df;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: inherit;
+      resize: vertical;
+      min-height: 48px;
+    }
+    .card-wrap { margin-bottom: 8px; }
+    .card-wrap .card { margin-bottom: 0; }
+    .tab-edit { margin-left: 6px; opacity: 0.8; }
     #error {
       display: none;
       margin: 0 16px 8px;
@@ -139,11 +195,15 @@
     <button id="refresh">Refresh</button>
   </header>
   <div id="tabs"></div>
+  <div id="filter-row">
+    <input id="loc-filter" placeholder="Filter visible listings by location (e.g. Sacramento, Remote)" />
+  </div>
   <div id="add-form">
     <input id="add-label" placeholder="Tab name (e.g. Data Analyst)" />
     <input id="add-keywords" placeholder="Keywords, comma-separated (e.g. data analyst, analytics)" />
     <input id="add-locations" placeholder="Locations, comma-separated (e.g. Sacramento, Remote) — blank = anywhere" />
     <div class="row">
+      <button id="add-delete">Delete tab</button>
       <button id="add-cancel">Cancel</button>
       <button id="add-save">Add role</button>
     </div>

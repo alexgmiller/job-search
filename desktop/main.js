@@ -57,6 +57,18 @@ async function fetchUnseen() {
   return data ?? [];
 }
 
+async function fetchApplied() {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('job_listings')
+    .select('id, company, role, location, url, found_at, search_id, status, applied_at, notes')
+    .not('status', 'is', null)
+    .order('applied_at', { ascending: false });
+  // Tolerate migration-3 not having run yet: no Applied tab data.
+  if (error) return [];
+  return data ?? [];
+}
+
 async function fetchSearches() {
   if (!supabase) return [];
   const { data, error } = await supabase
@@ -165,6 +177,7 @@ if (!gotLock) {
 
     ipcMain.handle('refresh', () => poll());
     ipcMain.handle('get-searches', () => fetchSearches());
+    ipcMain.handle('get-applied', () => fetchApplied());
     ipcMain.handle('add-search', async (_e, { label, keywords, locations }) => {
       if (!supabase) throw new Error('Supabase not configured');
       const { error } = await supabase
@@ -172,6 +185,47 @@ if (!gotLock) {
         .insert({ label, keywords, locations });
       if (error) throw new Error(error.message);
       return fetchSearches();
+    });
+    ipcMain.handle('update-search', async (_e, { id, label, keywords, locations }) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      const { error } = await supabase
+        .from('searches')
+        .update({ label, keywords, locations })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+      return fetchSearches();
+    });
+    ipcMain.handle('delete-search', async (_e, id) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      const { error } = await supabase.from('searches').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      return fetchSearches();
+    });
+    ipcMain.handle('mark-applied', async (_e, id) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      // Applying also marks seen so it leaves the unseen list, but the row
+      // stays trackable in the Applied tab.
+      const { error } = await supabase
+        .from('job_listings')
+        .update({ status: 'applied', applied_at: new Date().toISOString(), seen: true })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+    });
+    ipcMain.handle('set-status', async (_e, { id, status }) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      const { error } = await supabase
+        .from('job_listings')
+        .update({ status })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+    });
+    ipcMain.handle('set-notes', async (_e, { id, notes }) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      const { error } = await supabase
+        .from('job_listings')
+        .update({ notes: notes || null })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
     });
     ipcMain.handle('mark-seen', async (_e, id) => {
       if (!supabase) throw new Error('Supabase not configured');

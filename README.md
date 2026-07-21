@@ -31,11 +31,19 @@ free key at rapidapi.com (subscribe to the JSearch API, free tier).
 
 ## Desktop app (current) — `desktop/`
 
-Electron app for Windows and macOS. Shows unseen listings (click to open
-the posting, ✕ to mark seen, Refresh button), polls Supabase every few
-minutes in the background, and fires a native OS notification when new
-listings appear. No push service, no accounts, no Apple fee — closing the
-window minimizes to the tray so notifications keep working.
+Electron app for Windows and macOS. Shows unseen listings in per-role
+tabs (click to open the posting, ✕ to dismiss, "Applied ✓" to start
+tracking an application), polls Supabase every few minutes in the
+background, and fires a native OS notification when new listings appear.
+Closing the window minimizes to the tray so notifications keep working.
+
+- **Tabs** come from the `searches` table; add with **+**, edit or delete
+  via the ✎ on the active tab (deleting a tab keeps its listings in All).
+- **Applied tab** tracks applications with a status pipeline
+  (Applied → Interviewing → Offer/Rejected) and per-listing notes.
+- **Location box** filters the visible list by substring, any tab.
+
+Requires migrations 1–3 in `supabase/` to have been run.
 
 ```sh
 cd desktop
