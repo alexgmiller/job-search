@@ -37,13 +37,16 @@ tracking an application), polls Supabase every few minutes in the
 background, and fires a native OS notification when new listings appear.
 Closing the window minimizes to the tray so notifications keep working.
 
-- **Tabs** come from the `searches` table; add with **+**, edit or delete
-  via the ✎ on the active tab (deleting a tab keeps its listings in All).
-- **Applied tab** tracks applications with a status pipeline
-  (Applied → Interviewing → Offer/Rejected) and per-listing notes.
-- **Location box** filters the visible list by substring, any tab.
+- **Views**: New (untouched listings) / Seen (reviewed, might apply) /
+  In Progress (applications, with status pipeline Applied → Interviewing
+  → Offer/Rejected and per-listing notes) / Dismissed (not interested,
+  restorable). 👁 parks a listing in Seen, ✓ applies, ✕ dismisses.
+- **Tabs** come from the `searches` table and filter within each view;
+  add with **+**, edit or delete via the ✎ on the active tab (deleting
+  a tab keeps its listings in All).
+- **Location box** filters the visible list by substring, any view/tab.
 
-Requires migrations 1–3 in `supabase/` to have been run.
+Requires migrations 1–4 in `supabase/` to have been run.
 
 ```sh
 cd desktop

@@ -44,28 +44,18 @@ let quitting = false;
 const knownIds = new Set();
 let firstPoll = true;
 
-async function fetchUnseen() {
+async function fetchListings() {
   if (!supabase) {
     throw new Error('Missing SUPABASE_URL / SUPABASE_ANON_KEY — copy .env.example to .env.');
   }
+  // Everything the four views need in one query; the renderer splits it.
+  // Newest 500 keeps the payload bounded once dismissed rows pile up.
   const { data, error } = await supabase
     .from('job_listings')
-    .select('id, company, role, location, url, found_at, seen, search_id')
-    .eq('seen', false)
-    .order('found_at', { ascending: false });
+    .select('id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at')
+    .order('found_at', { ascending: false })
+    .limit(500);
   if (error) throw new Error(error.message);
-  return data ?? [];
-}
-
-async function fetchApplied() {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('job_listings')
-    .select('id, company, role, location, url, found_at, search_id, status, applied_at, notes')
-    .not('status', 'is', null)
-    .order('applied_at', { ascending: false });
-  // Tolerate migration-3 not having run yet: no Applied tab data.
-  if (error) return [];
   return data ?? [];
 }
 
@@ -96,8 +86,8 @@ function notifyNew(fresh) {
 
 async function poll() {
   try {
-    const listings = await fetchUnseen();
-    const fresh = listings.filter((l) => !knownIds.has(l.id));
+    const listings = await fetchListings();
+    const fresh = listings.filter((l) => !l.seen && !knownIds.has(l.id));
     for (const l of listings) knownIds.add(l.id);
     if (!firstPoll && fresh.length > 0) notifyNew(fresh);
     firstPoll = false;
@@ -130,8 +120,8 @@ function showWindow() {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 480,
-    height: 640,
+    width: 560,
+    height: 680,
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -177,7 +167,6 @@ if (!gotLock) {
 
     ipcMain.handle('refresh', () => poll());
     ipcMain.handle('get-searches', () => fetchSearches());
-    ipcMain.handle('get-applied', () => fetchApplied());
     ipcMain.handle('add-search', async (_e, { label, keywords, locations }) => {
       if (!supabase) throw new Error('Supabase not configured');
       const { error } = await supabase
@@ -203,11 +192,32 @@ if (!gotLock) {
     });
     ipcMain.handle('mark-applied', async (_e, id) => {
       if (!supabase) throw new Error('Supabase not configured');
-      // Applying also marks seen so it leaves the unseen list, but the row
-      // stays trackable in the Applied tab.
+      // Applying moves the row to In Progress regardless of where it was.
       const { error } = await supabase
         .from('job_listings')
-        .update({ status: 'applied', applied_at: new Date().toISOString(), seen: true })
+        .update({
+          status: 'applied',
+          applied_at: new Date().toISOString(),
+          seen: true,
+          dismissed_at: null,
+        })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+    });
+    ipcMain.handle('dismiss', async (_e, id) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      const { error } = await supabase
+        .from('job_listings')
+        .update({ seen: true, dismissed_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+    });
+    ipcMain.handle('restore', async (_e, id) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      // Restored rows land in Seen, not New — you've clearly looked at them.
+      const { error } = await supabase
+        .from('job_listings')
+        .update({ seen: true, dismissed_at: null })
         .eq('id', id);
       if (error) throw new Error(error.message);
     });

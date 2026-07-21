@@ -31,6 +31,26 @@
       cursor: pointer;
     }
     #refresh:disabled { opacity: 0.6; cursor: default; }
+    #views {
+      display: flex;
+      gap: 4px;
+      padding: 0 16px 10px;
+    }
+    .view {
+      flex: 1;
+      border: 1px solid #d5d9df;
+      background: #fff;
+      color: #444;
+      font-size: 12px;
+      padding: 6px 0;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .view.active {
+      background: #1f2937;
+      border-color: #1f2937;
+      color: #fff;
+    }
     #tabs {
       display: flex;
       gap: 6px;
@@ -99,6 +119,30 @@
       flex-shrink: 0;
     }
     .apply-btn:hover { background: #d4eadd; }
+    .seen-btn {
+      border: none;
+      background: #e8f1fa;
+      color: #2f6ea8;
+      font-size: 11px;
+      padding: 5px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      margin-left: 8px;
+      flex-shrink: 0;
+    }
+    .seen-btn:hover { background: #d8e8f7; }
+    .restore-btn {
+      border: none;
+      background: #eee;
+      color: #444;
+      font-size: 11px;
+      padding: 5px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      margin-left: 8px;
+      flex-shrink: 0;
+    }
+    .restore-btn:hover { background: #ddd; }
     .status-select {
       font-size: 11px;
       border: 1px solid #d5d9df;
@@ -194,6 +238,7 @@
     <h1>New Listings</h1>
     <button id="refresh">Refresh</button>
   </header>
+  <div id="views"></div>
   <div id="tabs"></div>
   <div id="filter-row">
     <input id="loc-filter" placeholder="Filter visible listings by location (e.g. Sacramento, Remote)" />

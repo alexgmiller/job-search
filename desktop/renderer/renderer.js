@@ -1,6 +1,7 @@
 const listEl = document.getElementById('list');
 const errorEl = document.getElementById('error');
 const refreshBtn = document.getElementById('refresh');
+const viewsEl = document.getElementById('views');
 const tabsEl = document.getElementById('tabs');
 const addFormEl = document.getElementById('add-form');
 const locFilterEl = document.getElementById('loc-filter');
@@ -8,13 +9,19 @@ const addDeleteBtn = document.getElementById('add-delete');
 const addSaveBtn = document.getElementById('add-save');
 
 const STATUSES = ['applied', 'interviewing', 'offer', 'rejected'];
+const VIEWS = [
+  { key: 'new', label: 'New' },
+  { key: 'seen', label: 'Seen' },
+  { key: 'progress', label: 'In Progress' },
+  { key: 'dismissed', label: 'Dismissed' },
+];
 
 let searches = [];
-let allListings = []; // unseen
-let appliedListings = [];
-let activeTab = 'all'; // 'all' | 'applied' | a search id
+let all = []; // every listing (renderer splits into views)
+let activeView = 'new';
+let activeTab = 'all'; // 'all' | a search id
 let locationFilter = '';
-let editingSearchId = null; // null = form adds; otherwise form edits this tab
+let editingSearchId = null;
 
 function showError(msg) {
   errorEl.textContent = msg;
@@ -25,7 +32,38 @@ function clearError() {
   errorEl.style.display = 'none';
 }
 
-// ---------- tabs ----------
+// ---------- view membership ----------
+
+function viewOf(l) {
+  if (l.status) return 'progress';
+  if (l.dismissed_at) return 'dismissed';
+  if (l.seen) return 'seen';
+  return 'new';
+}
+
+function inView(view) {
+  const listings = all.filter((l) => viewOf(l) === view);
+  return view === 'progress'
+    ? listings.sort((a, b) => (b.applied_at ?? '').localeCompare(a.applied_at ?? ''))
+    : listings;
+}
+
+// ---------- views + tabs ----------
+
+function renderViews() {
+  viewsEl.replaceChildren();
+  for (const v of VIEWS) {
+    const btn = document.createElement('button');
+    btn.className = 'view' + (activeView === v.key ? ' active' : '');
+    btn.textContent = `${v.label} (${inView(v.key).length})`;
+    btn.addEventListener('click', () => {
+      activeView = v.key;
+      closeForm();
+      rerender();
+    });
+    viewsEl.appendChild(btn);
+  }
+}
 
 function openForm(search) {
   editingSearchId = search ? search.id : null;
@@ -44,12 +82,12 @@ function closeForm() {
 
 function renderTabs() {
   tabsEl.replaceChildren();
+  const viewListings = inView(activeView);
 
   const makeTab = (id, label, opts = {}) => {
     const btn = document.createElement('button');
     btn.className = 'tab' + (activeTab === id ? ' active' : '');
     btn.textContent = label;
-    // Active role tabs get a pencil to edit keywords/locations or delete.
     if (opts.editable && activeTab === id) {
       const pencil = document.createElement('span');
       pencil.className = 'tab-edit';
@@ -64,18 +102,16 @@ function renderTabs() {
     btn.addEventListener('click', () => {
       activeTab = id;
       closeForm();
-      renderTabs();
-      renderList();
+      rerender();
     });
     tabsEl.appendChild(btn);
   };
 
-  makeTab('all', `All (${allListings.length})`);
+  makeTab('all', `All (${viewListings.length})`);
   for (const s of searches) {
-    const count = allListings.filter((l) => l.search_id === s.id).length;
+    const count = viewListings.filter((l) => l.search_id === s.id).length;
     makeTab(s.id, `${s.label} (${count})`, { editable: true });
   }
-  makeTab('applied', `Applied (${appliedListings.length})`);
 
   const plus = document.createElement('button');
   plus.className = 'tab';
@@ -91,19 +127,25 @@ function renderTabs() {
   tabsEl.appendChild(plus);
 }
 
-// ---------- listings ----------
+// ---------- cards ----------
 
 function visibleListings() {
-  let listings;
-  if (activeTab === 'applied') listings = appliedListings;
-  else if (activeTab === 'all') listings = allListings;
-  else listings = allListings.filter((l) => l.search_id === activeTab);
-
+  let listings = inView(activeView);
+  if (activeTab !== 'all') {
+    listings = listings.filter((l) => l.search_id === activeTab);
+  }
   if (locationFilter) {
     const f = locationFilter.toLowerCase();
     listings = listings.filter((l) => (l.location ?? '').toLowerCase().includes(f));
   }
   return listings;
+}
+
+// Update a listing locally + remotely; on failure, re-show the truth.
+function mutate(l, localPatch, remoteCall, failMsg) {
+  Object.assign(l, localPatch);
+  rerender();
+  remoteCall().catch(() => showError(failMsg));
 }
 
 function makeCardBody(l) {
@@ -120,11 +162,8 @@ function makeCardBody(l) {
 
   const meta = document.createElement('div');
   meta.className = 'meta';
-  const date = activeTab === 'applied' ? l.applied_at : l.found_at;
-  meta.textContent = [
-    l.location,
-    date ? new Date(date).toLocaleDateString() : null,
-  ]
+  const date = activeView === 'progress' ? l.applied_at : l.found_at;
+  meta.textContent = [l.location, date ? new Date(date).toLocaleDateString() : null]
     .filter(Boolean)
     .join(' · ');
 
@@ -132,121 +171,145 @@ function makeCardBody(l) {
   return body;
 }
 
-function makeUnseenCard(l) {
-  const card = document.createElement('div');
-  card.className = 'card';
-  card.append(makeCardBody(l));
-
-  const applyBtn = document.createElement('button');
-  applyBtn.className = 'apply-btn';
-  applyBtn.textContent = 'Applied ✓';
-  applyBtn.title = 'Mark as applied (moves to the Applied tab)';
-  applyBtn.addEventListener('click', async (e) => {
+function seenButton(l) {
+  const btn = document.createElement('button');
+  btn.className = 'seen-btn';
+  btn.textContent = '👁 Seen';
+  btn.title = 'Reviewed — keep in the Seen list to maybe apply later';
+  btn.addEventListener('click', (e) => {
     e.stopPropagation();
-    allListings = allListings.filter((x) => x.id !== l.id);
-    renderTabs();
-    renderList();
-    try {
-      await window.api.markApplied(l.id);
-      appliedListings = await window.api.getApplied();
-      renderTabs();
-      if (activeTab === 'applied') renderList();
-    } catch {
-      showError('Could not mark as applied — refresh and retry.');
-    }
+    mutate(l, { seen: true }, () => window.api.markSeen(l.id),
+      'Could not mark as seen — refresh and retry.');
   });
-
-  const dismiss = document.createElement('button');
-  dismiss.className = 'dismiss';
-  dismiss.textContent = '✕';
-  dismiss.title = 'Dismiss (mark seen)';
-  dismiss.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    allListings = allListings.filter((x) => x.id !== l.id);
-    renderTabs();
-    renderList();
-    try {
-      await window.api.markSeen(l.id);
-    } catch {
-      showError('Could not mark listing as seen — refresh and retry.');
-    }
-  });
-
-  card.addEventListener('click', () => {
-    if (l.url) window.api.openUrl(l.url);
-  });
-
-  card.append(applyBtn, dismiss);
-  return card;
+  return btn;
 }
 
-function makeAppliedCard(l) {
+function applyButton(l) {
+  const btn = document.createElement('button');
+  btn.className = 'apply-btn';
+  btn.textContent = 'Applied ✓';
+  btn.title = 'Mark as applied (moves to In Progress)';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    mutate(
+      l,
+      { status: 'applied', applied_at: new Date().toISOString(), seen: true, dismissed_at: null },
+      () => window.api.markApplied(l.id),
+      'Could not mark as applied — refresh and retry.'
+    );
+  });
+  return btn;
+}
+
+function dismissButton(l) {
+  const btn = document.createElement('button');
+  btn.className = 'dismiss';
+  btn.textContent = '✕';
+  btn.title = 'Dismiss — not interested (recoverable in Dismissed)';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    mutate(
+      l,
+      { seen: true, dismissed_at: new Date().toISOString() },
+      () => window.api.dismiss(l.id),
+      'Could not dismiss — refresh and retry.'
+    );
+  });
+  return btn;
+}
+
+function restoreButton(l) {
+  const btn = document.createElement('button');
+  btn.className = 'restore-btn';
+  btn.textContent = '↩ Restore';
+  btn.title = 'Move back to the Seen list';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    mutate(l, { seen: true, dismissed_at: null }, () => window.api.restore(l.id),
+      'Could not restore — refresh and retry.');
+  });
+  return btn;
+}
+
+function makeCard(l) {
   const wrap = document.createElement('div');
   wrap.className = 'card-wrap';
 
   const card = document.createElement('div');
   card.className = 'card';
   card.append(makeCardBody(l));
-
-  const status = document.createElement('select');
-  status.className = 'status-select';
-  for (const s of STATUSES) {
-    const opt = document.createElement('option');
-    opt.value = s;
-    opt.textContent = s[0].toUpperCase() + s.slice(1);
-    if (l.status === s) opt.selected = true;
-    status.appendChild(opt);
-  }
-  status.addEventListener('click', (e) => e.stopPropagation());
-  status.addEventListener('change', async () => {
-    l.status = status.value;
-    try {
-      await window.api.setStatus(l.id, status.value);
-    } catch {
-      showError('Could not update status — refresh and retry.');
-    }
-  });
-
-  const notesBtn = document.createElement('button');
-  notesBtn.className = 'notes-btn';
-  notesBtn.textContent = l.notes ? 'Notes •' : 'Notes';
-
   card.addEventListener('click', () => {
     if (l.url) window.api.openUrl(l.url);
   });
 
-  card.append(status, notesBtn);
-  wrap.append(card);
-
-  let notesArea = null;
-  notesBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (notesArea) {
-      notesArea.remove();
-      notesArea = null;
-      return;
+  if (activeView === 'new') {
+    card.append(seenButton(l), applyButton(l), dismissButton(l));
+  } else if (activeView === 'seen') {
+    card.append(applyButton(l), dismissButton(l));
+  } else if (activeView === 'dismissed') {
+    card.append(restoreButton(l));
+  } else {
+    // In Progress: status pipeline + notes
+    const status = document.createElement('select');
+    status.className = 'status-select';
+    for (const s of STATUSES) {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s[0].toUpperCase() + s.slice(1);
+      if (l.status === s) opt.selected = true;
+      status.appendChild(opt);
     }
-    notesArea = document.createElement('textarea');
-    notesArea.className = 'notes-area';
-    notesArea.placeholder = 'Notes — comp info, contacts, why you’re interested…';
-    notesArea.value = l.notes ?? '';
-    notesArea.addEventListener('blur', async () => {
-      const text = notesArea.value.trim();
-      if (text === (l.notes ?? '')) return;
-      l.notes = text || null;
-      notesBtn.textContent = l.notes ? 'Notes •' : 'Notes';
-      try {
-        await window.api.setNotes(l.id, text);
-      } catch {
-        showError('Could not save notes — they may be lost on refresh.');
-      }
+    status.addEventListener('click', (e) => e.stopPropagation());
+    status.addEventListener('change', () => {
+      l.status = status.value;
+      window.api.setStatus(l.id, status.value).catch(() =>
+        showError('Could not update status — refresh and retry.')
+      );
+      renderViews();
     });
-    wrap.append(notesArea);
-    notesArea.focus();
-  });
 
+    const notesBtn = document.createElement('button');
+    notesBtn.className = 'notes-btn';
+    notesBtn.textContent = l.notes ? 'Notes •' : 'Notes';
+
+    let notesArea = null;
+    notesBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (notesArea) {
+        notesArea.remove();
+        notesArea = null;
+        return;
+      }
+      notesArea = document.createElement('textarea');
+      notesArea.className = 'notes-area';
+      notesArea.placeholder = 'Notes — comp info, contacts, why you’re interested…';
+      notesArea.value = l.notes ?? '';
+      notesArea.addEventListener('blur', () => {
+        const text = notesArea.value.trim();
+        if (text === (l.notes ?? '')) return;
+        l.notes = text || null;
+        notesBtn.textContent = l.notes ? 'Notes •' : 'Notes';
+        window.api.setNotes(l.id, text).catch(() =>
+          showError('Could not save notes — they may be lost on refresh.')
+        );
+      });
+      wrap.append(notesArea);
+      notesArea.focus();
+    });
+
+    card.append(status, notesBtn);
+  }
+
+  wrap.append(card);
   return wrap;
 }
+
+const EMPTY_TEXT = {
+  new: 'No new listings. The scraper runs every 3 hours.',
+  seen: 'Nothing marked seen — use 👁 on a new listing to park it here.',
+  progress: 'Nothing applied to yet — hit "Applied ✓" on a listing.',
+  dismissed: 'Nothing dismissed.',
+};
 
 function renderList() {
   listEl.replaceChildren();
@@ -255,33 +318,29 @@ function renderList() {
   if (!listings.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.textContent =
-      activeTab === 'applied'
-        ? 'Nothing applied to yet — hit "Applied ✓" on a listing.'
-        : locationFilter
-          ? 'No unseen listings match this location filter.'
-          : 'No unseen listings in this tab.';
+    empty.textContent = locationFilter
+      ? 'Nothing here matches the location filter.'
+      : EMPTY_TEXT[activeView];
     listEl.appendChild(empty);
     return;
   }
 
-  for (const l of listings) {
-    listEl.appendChild(activeTab === 'applied' ? makeAppliedCard(l) : makeUnseenCard(l));
-  }
+  for (const l of listings) listEl.appendChild(makeCard(l));
+}
+
+function rerender() {
+  renderViews();
+  renderTabs();
+  renderList();
 }
 
 function render(listings) {
-  allListings = listings;
-  if (
-    activeTab !== 'all' &&
-    activeTab !== 'applied' &&
-    !searches.some((s) => s.id === activeTab)
-  ) {
+  all = listings;
+  if (activeTab !== 'all' && !searches.some((s) => s.id === activeTab)) {
     activeTab = 'all';
   }
   clearError();
-  renderTabs();
-  renderList();
+  rerender();
 }
 
 // ---------- wiring ----------
@@ -289,13 +348,10 @@ function render(listings) {
 window.api.onListings(render);
 window.api.onError(showError);
 
-Promise.all([window.api.getSearches(), window.api.getApplied()]).then(
-  ([s, a]) => {
-    searches = s;
-    appliedListings = a;
-    renderTabs();
-  }
-);
+window.api.getSearches().then((s) => {
+  searches = s;
+  rerender();
+});
 
 locFilterEl.addEventListener('input', () => {
   locationFilter = locFilterEl.value.trim();
@@ -304,10 +360,7 @@ locFilterEl.addEventListener('input', () => {
 
 refreshBtn.addEventListener('click', async () => {
   refreshBtn.disabled = true;
-  [searches, appliedListings] = await Promise.all([
-    window.api.getSearches(),
-    window.api.getApplied(),
-  ]);
+  searches = await window.api.getSearches();
   await window.api.refresh();
   refreshBtn.disabled = false;
 });
@@ -323,8 +376,7 @@ addDeleteBtn.addEventListener('click', async () => {
     closeForm();
     activeTab = 'all';
     clearError();
-    renderTabs();
-    renderList();
+    rerender();
   } catch (e) {
     showError(`Could not delete tab: ${e.message}`);
   }
@@ -347,7 +399,7 @@ addSaveBtn.addEventListener('click', async () => {
       : await window.api.addSearch({ label, keywords, locations });
     closeForm();
     clearError();
-    renderTabs();
+    rerender();
   } catch (e) {
     showError(`Could not save tab: ${e.message}`);
   }
