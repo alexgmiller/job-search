@@ -31,6 +31,126 @@
       cursor: pointer;
     }
     #refresh:disabled { opacity: 0.6; cursor: default; }
+    #profile-btn {
+      border: 1px solid #d5d9df;
+      background: #fff;
+      color: #444;
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      margin-right: 8px;
+    }
+    #profile-btn.active { background: #1f2937; border-color: #1f2937; color: #fff; }
+    #profile-panel { display: none; flex: 1; overflow-y: auto; padding: 0 16px 16px; }
+    .chunk {
+      background: #fff;
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .chunk-head { display: flex; align-items: center; gap: 8px; }
+    .chunk-kind {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: #eef2f7;
+      color: #556;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    .chunk-title { font-size: 13px; font-weight: 600; flex: 1; }
+    .chunk-content { font-size: 12px; color: #444; margin-top: 6px; white-space: pre-wrap; }
+    #chunk-form { background: #fff; border-radius: 10px; padding: 12px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    #chunk-form select, #chunk-form input, #chunk-form textarea {
+      width: 100%;
+      margin-bottom: 6px;
+      padding: 6px 8px;
+      border: 1px solid #d5d9df;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: inherit;
+      background: #fff;
+    }
+    #chunk-form textarea { min-height: 72px; resize: vertical; }
+    #chunk-form .row { display: flex; justify-content: flex-end; }
+    #chunk-save {
+      border: none;
+      background: #2f8ad6;
+      color: #fff;
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .fit-badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 10px;
+      margin-left: 8px;
+      flex-shrink: 0;
+      cursor: default;
+    }
+    .fit-high { background: #e7f3ec; color: #1c7c43; }
+    .fit-mid  { background: #fdf3e0; color: #9a6a10; }
+    .fit-low  { background: #f0f1f3; color: #667; }
+    .tailor-btn {
+      border: none;
+      background: #f0eafa;
+      color: #6a3fb5;
+      font-size: 11px;
+      padding: 5px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      margin-left: 6px;
+      flex-shrink: 0;
+    }
+    .tailor-btn:hover { background: #e5dbf6; }
+    #tailor-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 10;
+      align-items: center;
+      justify-content: center;
+    }
+    #tailor-box {
+      background: #fff;
+      border-radius: 12px;
+      width: 90%;
+      max-width: 640px;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      padding: 14px;
+    }
+    #tailor-title { font-size: 14px; font-weight: 700; margin-bottom: 8px; }
+    #tailor-status { font-size: 12px; color: #666; margin-bottom: 8px; }
+    #tailor-content {
+      flex: 1;
+      overflow: auto;
+      background: #f6f7f9;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 12px;
+      font-family: ui-monospace, Consolas, monospace;
+      white-space: pre-wrap;
+      display: none;
+    }
+    #tailor-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 10px; }
+    #tailor-actions button {
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 12px;
+      cursor: pointer;
+      background: #eee;
+      color: #444;
+    }
+    #tailor-copy, #tailor-save { background: #2f8ad6; color: #fff; }
     #views {
       display: flex;
       gap: 4px;
@@ -236,7 +356,10 @@
 <body>
   <header>
     <h1>New Listings</h1>
-    <button id="refresh">Refresh</button>
+    <div>
+      <button id="profile-btn">Profile</button>
+      <button id="refresh">Refresh</button>
+    </div>
   </header>
   <div id="views"></div>
   <div id="tabs"></div>
@@ -255,6 +378,34 @@
   </div>
   <div id="error"></div>
   <div id="list"></div>
+  <div id="profile-panel">
+    <div id="chunk-form">
+      <select id="chunk-kind">
+        <option value="experience">Experience</option>
+        <option value="education">Education</option>
+        <option value="skill">Skill</option>
+        <option value="project">Project</option>
+        <option value="certification">Certification</option>
+        <option value="other">Other</option>
+      </select>
+      <input id="chunk-title" placeholder="Title (e.g. Help Desk Intern — Acme Corp, 2025)" />
+      <textarea id="chunk-content" placeholder="Details — responsibilities, tech used, outcomes. The fit scorer and resume tailor only know what you write here."></textarea>
+      <div class="row"><button id="chunk-save">Add to profile</button></div>
+    </div>
+    <div id="chunk-list"></div>
+  </div>
+  <div id="tailor-modal">
+    <div id="tailor-box">
+      <div id="tailor-title"></div>
+      <div id="tailor-status"></div>
+      <div id="tailor-content"></div>
+      <div id="tailor-actions">
+        <button id="tailor-copy">Copy</button>
+        <button id="tailor-save">Save…</button>
+        <button id="tailor-close">Close</button>
+      </div>
+    </div>
+  </div>
   <footer>
     <span>Closing this window keeps notifications running (tray)</span>
     <button id="quit">Quit</button>

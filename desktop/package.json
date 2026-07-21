@@ -8,6 +8,7 @@
   },
   "private": true,
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.4",
     "@supabase/supabase-js": "^2.49.0"
   },
   "devDependencies": {

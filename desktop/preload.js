@@ -13,6 +13,12 @@ contextBridge.exposeInMainWorld('api', {
   markApplied: (id) => ipcRenderer.invoke('mark-applied', id),
   setStatus: (id, status) => ipcRenderer.invoke('set-status', { id, status }),
   setNotes: (id, notes) => ipcRenderer.invoke('set-notes', { id, notes }),
+  getProfile: () => ipcRenderer.invoke('get-profile'),
+  addChunk: (chunk) => ipcRenderer.invoke('add-chunk', chunk),
+  deleteChunk: (id) => ipcRenderer.invoke('delete-chunk', id),
+  tailorResume: (id) => ipcRenderer.invoke('tailor-resume', id),
+  saveText: (content, defaultName) =>
+    ipcRenderer.invoke('save-text', { content, defaultName }),
   markSeen: (id) => ipcRenderer.invoke('mark-seen', id),
   openUrl: (url) => ipcRenderer.invoke('open-url', url),
   quit: () => ipcRenderer.invoke('quit'),

@@ -4,6 +4,7 @@ const {
   Menu,
   Notification,
   Tray,
+  dialog,
   ipcMain,
   nativeImage,
   shell,
@@ -52,11 +53,92 @@ async function fetchListings() {
   // Newest 500 keeps the payload bounded once dismissed rows pile up.
   const { data, error } = await supabase
     .from('job_listings')
-    .select('id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at')
+    .select('id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason')
     .order('found_at', { ascending: false })
     .limit(500);
   if (error) throw new Error(error.message);
   return data ?? [];
+}
+
+async function fetchProfile() {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('profile_chunks')
+    .select('id, kind, title, content')
+    .order('created_at', { ascending: true });
+  // Tolerate migration-5 not having run yet.
+  if (error) return [];
+  return data ?? [];
+}
+
+const TAILOR_SYSTEM = `You write tailored resumes. You are given a candidate's
+profile (chunks of real experience, education, skills, projects) and one job
+listing. Produce a one-page resume in Markdown, tailored to that job:
+
+- Select and order the most relevant profile content for this role; lead with
+  what matches the job's requirements.
+- Rephrase for impact and use the job posting's terminology where honest.
+- NEVER invent employers, titles, dates, degrees, certifications, tools, or
+  accomplishments not present in the profile. Reframing is fine; fabricating
+  is not.
+- Structure: name/contact placeholder line, a 2-3 sentence summary written
+  for this specific role, then sections (Experience, Projects, Skills,
+  Education) ordered by relevance.
+- If the job asks for something important the profile cannot support, add a
+  final "Gaps to address" note listing it (outside the resume proper).`;
+
+async function tailorResume(listingId) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error(
+      'No ANTHROPIC_API_KEY in desktop/.env — get one at console.anthropic.com and restart the app.'
+    );
+  }
+  if (!supabase) throw new Error('Supabase not configured');
+
+  const [{ data: listing, error: lErr }, chunks] = await Promise.all([
+    supabase
+      .from('job_listings')
+      .select('company, role, location, description')
+      .eq('id', listingId)
+      .single(),
+    fetchProfile(),
+  ]);
+  if (lErr) throw new Error(lErr.message);
+  if (!chunks.length) {
+    throw new Error('Your profile is empty — add experience/skills chunks via the Profile button first.');
+  }
+
+  const profile = chunks
+    .map((c) => `[${c.kind}] ${c.title}\n${c.content}`)
+    .join('\n\n');
+
+  const Anthropic = require('@anthropic-ai/sdk');
+  const anthropic = new Anthropic();
+  const response = await anthropic.messages.create({
+    model: 'claude-opus-4-8',
+    max_tokens: 16000,
+    thinking: { type: 'adaptive' },
+    system: TAILOR_SYSTEM,
+    messages: [
+      {
+        role: 'user',
+        content:
+          `CANDIDATE PROFILE:\n${profile}\n\n` +
+          `JOB LISTING:\n${listing.role} at ${listing.company}` +
+          (listing.location ? ` (${listing.location})` : '') +
+          (listing.description
+            ? `\n\n${listing.description}`
+            : '\n\n(no description stored — tailor from the title; note this limitation in the Gaps section)'),
+      },
+    ],
+  });
+  if (response.stop_reason === 'refusal') {
+    throw new Error('The model declined this request — try again.');
+  }
+  return response.content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n');
 }
 
 async function fetchSearches() {
@@ -228,6 +310,31 @@ if (!gotLock) {
         .update({ status })
         .eq('id', id);
       if (error) throw new Error(error.message);
+    });
+    ipcMain.handle('get-profile', () => fetchProfile());
+    ipcMain.handle('add-chunk', async (_e, { kind, title, content }) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      const { error } = await supabase
+        .from('profile_chunks')
+        .insert({ kind, title, content });
+      if (error) throw new Error(error.message);
+      return fetchProfile();
+    });
+    ipcMain.handle('delete-chunk', async (_e, id) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      const { error } = await supabase.from('profile_chunks').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      return fetchProfile();
+    });
+    ipcMain.handle('tailor-resume', (_e, id) => tailorResume(id));
+    ipcMain.handle('save-text', async (_e, { content, defaultName }) => {
+      const { canceled, filePath } = await dialog.showSaveDialog(win, {
+        defaultPath: defaultName,
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      });
+      if (canceled || !filePath) return null;
+      fs.writeFileSync(filePath, content, 'utf8');
+      return filePath;
     });
     ipcMain.handle('set-notes', async (_e, { id, notes }) => {
       if (!supabase) throw new Error('Supabase not configured');

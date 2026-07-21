@@ -43,9 +43,21 @@ function viewOf(l) {
 
 function inView(view) {
   const listings = all.filter((l) => viewOf(l) === view);
-  return view === 'progress'
-    ? listings.sort((a, b) => (b.applied_at ?? '').localeCompare(a.applied_at ?? ''))
-    : listings;
+  if (view === 'progress') {
+    return listings.sort((a, b) =>
+      (b.applied_at ?? '').localeCompare(a.applied_at ?? '')
+    );
+  }
+  if (view === 'new' || view === 'seen') {
+    // Best fit first; unscored listings fall back to date order at the end.
+    return listings.sort((a, b) => {
+      const af = a.fit_score ?? -1;
+      const bf = b.fit_score ?? -1;
+      if (af !== bf) return bf - af;
+      return (b.found_at ?? '').localeCompare(a.found_at ?? '');
+    });
+  }
+  return listings;
 }
 
 // ---------- views + tabs ----------
@@ -171,6 +183,29 @@ function makeCardBody(l) {
   return body;
 }
 
+function fitBadge(l) {
+  if (l.fit_score == null) return null;
+  const badge = document.createElement('span');
+  badge.className =
+    'fit-badge ' +
+    (l.fit_score >= 75 ? 'fit-high' : l.fit_score >= 50 ? 'fit-mid' : 'fit-low');
+  badge.textContent = l.fit_score;
+  badge.title = l.fit_reason ?? '';
+  return badge;
+}
+
+function tailorButton(l) {
+  const btn = document.createElement('button');
+  btn.className = 'tailor-btn';
+  btn.textContent = '📄 Tailor';
+  btn.title = 'Generate a resume tailored to this listing from your profile';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openTailorModal(l);
+  });
+  return btn;
+}
+
 function seenButton(l) {
   const btn = document.createElement('button');
   btn.className = 'seen-btn';
@@ -238,14 +273,16 @@ function makeCard(l) {
   const card = document.createElement('div');
   card.className = 'card';
   card.append(makeCardBody(l));
+  const badge = fitBadge(l);
+  if (badge) card.append(badge);
   card.addEventListener('click', () => {
     if (l.url) window.api.openUrl(l.url);
   });
 
   if (activeView === 'new') {
-    card.append(seenButton(l), applyButton(l), dismissButton(l));
+    card.append(tailorButton(l), seenButton(l), applyButton(l), dismissButton(l));
   } else if (activeView === 'seen') {
-    card.append(applyButton(l), dismissButton(l));
+    card.append(tailorButton(l), applyButton(l), dismissButton(l));
   } else if (activeView === 'dismissed') {
     card.append(restoreButton(l));
   } else {
@@ -297,7 +334,7 @@ function makeCard(l) {
       notesArea.focus();
     });
 
-    card.append(status, notesBtn);
+    card.append(status, notesBtn, tailorButton(l));
   }
 
   wrap.append(card);
@@ -402,6 +439,147 @@ addSaveBtn.addEventListener('click', async () => {
     rerender();
   } catch (e) {
     showError(`Could not save tab: ${e.message}`);
+  }
+});
+
+// ---------- tailor resume modal ----------
+
+const tailorModal = document.getElementById('tailor-modal');
+const tailorTitle = document.getElementById('tailor-title');
+const tailorStatus = document.getElementById('tailor-status');
+const tailorContent = document.getElementById('tailor-content');
+let tailorText = '';
+let tailorFileName = 'resume.md';
+
+async function openTailorModal(l) {
+  tailorTitle.textContent = `Resume for: ${l.role} — ${l.company}`;
+  tailorStatus.textContent =
+    'Generating tailored resume… this can take a minute or two.';
+  tailorStatus.style.display = 'block';
+  tailorContent.style.display = 'none';
+  tailorText = '';
+  tailorFileName = `resume-${l.company}-${l.role}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '') + '.md';
+  tailorModal.style.display = 'flex';
+  try {
+    tailorText = await window.api.tailorResume(l.id);
+    tailorContent.textContent = tailorText;
+    tailorStatus.style.display = 'none';
+    tailorContent.style.display = 'block';
+  } catch (e) {
+    tailorStatus.textContent = `Failed: ${e.message}`;
+  }
+}
+
+document.getElementById('tailor-close').addEventListener('click', () => {
+  tailorModal.style.display = 'none';
+});
+
+document.getElementById('tailor-copy').addEventListener('click', async () => {
+  if (!tailorText) return;
+  await navigator.clipboard.writeText(tailorText);
+  tailorStatus.textContent = 'Copied to clipboard.';
+  tailorStatus.style.display = 'block';
+});
+
+document.getElementById('tailor-save').addEventListener('click', async () => {
+  if (!tailorText) return;
+  const path = await window.api.saveText(tailorText, tailorFileName);
+  if (path) {
+    tailorStatus.textContent = `Saved to ${path}`;
+    tailorStatus.style.display = 'block';
+  }
+});
+
+// ---------- profile panel ----------
+
+const profileBtn = document.getElementById('profile-btn');
+const profilePanel = document.getElementById('profile-panel');
+const chunkListEl = document.getElementById('chunk-list');
+let profileOpen = false;
+
+function renderChunks(chunks) {
+  chunkListEl.replaceChildren();
+  if (!chunks.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent =
+      'No profile yet. Add chunks of your experience, education, and skills above — fit scoring and resume tailoring use only what you put here.';
+    chunkListEl.appendChild(empty);
+    return;
+  }
+  for (const c of chunks) {
+    const div = document.createElement('div');
+    div.className = 'chunk';
+
+    const head = document.createElement('div');
+    head.className = 'chunk-head';
+
+    const kind = document.createElement('span');
+    kind.className = 'chunk-kind';
+    kind.textContent = c.kind;
+
+    const title = document.createElement('span');
+    title.className = 'chunk-title';
+    title.textContent = c.title;
+
+    const del = document.createElement('button');
+    del.className = 'dismiss';
+    del.textContent = '✕';
+    del.title = 'Delete this chunk';
+    del.addEventListener('click', async () => {
+      if (!confirm(`Delete "${c.title}" from your profile?`)) return;
+      try {
+        renderChunks(await window.api.deleteChunk(c.id));
+      } catch (e) {
+        showError(`Could not delete: ${e.message}`);
+      }
+    });
+
+    head.append(kind, title, del);
+
+    const content = document.createElement('div');
+    content.className = 'chunk-content';
+    content.textContent = c.content;
+
+    div.append(head, content);
+    chunkListEl.appendChild(div);
+  }
+}
+
+function setProfileOpen(open) {
+  profileOpen = open;
+  profileBtn.classList.toggle('active', open);
+  profilePanel.style.display = open ? 'block' : 'none';
+  for (const el of [viewsEl, tabsEl, listEl]) {
+    el.style.display = open ? 'none' : '';
+  }
+  document.getElementById('filter-row').style.display = open ? 'none' : '';
+  addFormEl.style.display = 'none';
+  if (open) {
+    window.api.getProfile().then(renderChunks);
+  }
+}
+
+profileBtn.addEventListener('click', () => setProfileOpen(!profileOpen));
+
+document.getElementById('chunk-save').addEventListener('click', async () => {
+  const kind = document.getElementById('chunk-kind').value;
+  const title = document.getElementById('chunk-title').value.trim();
+  const content = document.getElementById('chunk-content').value.trim();
+  if (!title || !content) {
+    showError('A profile chunk needs a title and content.');
+    return;
+  }
+  try {
+    renderChunks(await window.api.addChunk({ kind, title, content }));
+    document.getElementById('chunk-title').value = '';
+    document.getElementById('chunk-content').value = '';
+    clearError();
+  } catch (e) {
+    showError(`Could not save chunk: ${e.message}`);
   }
 });
 
