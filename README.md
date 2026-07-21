@@ -15,9 +15,9 @@ tabs), inserts with the service-role key. Dedupe is a unique index on
 Runs every 3 hours via GitHub Actions
 ([.github/workflows/scrape.yml](.github/workflows/scrape.yml)). Repo
 secrets needed: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and
-optionally `RAPIDAPI_KEY` (Indeed/LinkedIn source) and `ANTHROPIC_API_KEY`
-(fit-scores new listings against `profile_chunks` with Claude, capped at
-25 per run; skipped silently when the key or profile is missing).
+optionally `RAPIDAPI_KEY` (Indeed/LinkedIn source). New listings are
+fit-scored against `profile_chunks` by keyword overlap — free, no API key;
+skipped silently when the profile is empty.
 
 Local test (uses `scraper/.env`, see `.env.example` there):
 
@@ -48,11 +48,12 @@ Closing the window minimizes to the tray so notifications keep working.
   a tab keeps its listings in All).
 - **Location box** filters the visible list by substring, any view/tab.
 - **Profile** (header button): chunks of your experience/education/skills
-  stored in `profile_chunks`. Feeds two AI features (both need an
-  `ANTHROPIC_API_KEY`): the scraper **fit-scores** each new listing against
-  your profile (0–100 badge, hover for the reason; New/Seen sort best-first),
-  and the **📄 Tailor** button on any listing generates a resume in Markdown
-  built only from your profile chunks (copy or save from the modal).
+  stored in `profile_chunks`. The scraper **fit-scores** each new listing
+  against your profile with free keyword matching — no API, badges are
+  relative rather than absolute (hover for matched terms; New/Seen sort
+  best-first). The **📄 Tailor** button generates a Markdown resume built
+  only from your profile chunks via Claude Haiku (a few cents per click;
+  needs `ANTHROPIC_API_KEY` in `desktop/.env`).
 
 Requires migrations 1–5 in `supabase/` to have been run.
 

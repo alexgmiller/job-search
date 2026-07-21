@@ -214,25 +214,32 @@ async function main() {
   if (inserted?.length) await scoreListings(inserted);
 }
 
-// ---------- AI fit scoring (only the newly inserted listings) ----------
+// ---------- keyword fit scoring (free, no API) ----------
+// Score = share of the profile's distinctive terms that appear in the job
+// text. Coarser than an LLM (can't judge seniority), but free and good
+// enough for relative ranking; badges are best read relative to each other.
 
-const SCORE_SCHEMA = {
-  type: 'object',
-  properties: {
-    score: { type: 'integer', description: 'Fit score from 0 to 100' },
-    reason: { type: 'string', description: 'One sentence explaining the score' },
-  },
-  required: ['score', 'reason'],
-  additionalProperties: false,
-};
+const STOPWORDS = new Set(
+  ('the and for with you your our are will this that have has can from not ' +
+   'all any been being able about into over under more most other some such ' +
+   'than then them they their there these those what when where which while ' +
+   'who whom why how each every both few very via per etc a an of in on at ' +
+   'to by is it as be we or if do does did its was were also may might must ' +
+   'should would could us new job work team role company experience years ' +
+   'ability strong plus bonus required requirements responsibilities skills ' +
+   'including preferred qualifications benefits salary equal opportunity').split(' ')
+);
 
-const MAX_SCORED_PER_RUN = 25;
+function terms(text) {
+  const out = new Set();
+  for (const m of (text ?? '').toLowerCase().matchAll(/[a-z][a-z0-9+#.]{2,}/g)) {
+    const t = m[0].replace(/\.+$/, '');
+    if (t.length >= 3 && !STOPWORDS.has(t)) out.add(t);
+  }
+  return out;
+}
 
 async function scoreListings(listings) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.log('ANTHROPIC_API_KEY not set — skipping fit scoring.');
-    return;
-  }
   const { data: chunks, error } = await supabase
     .from('profile_chunks')
     .select('kind, title, content');
@@ -241,56 +248,26 @@ async function scoreListings(listings) {
     return;
   }
 
-  const Anthropic = require('@anthropic-ai/sdk');
-  const anthropic = new Anthropic();
-
-  const profile = chunks
-    .map((c) => `[${c.kind}] ${c.title}\n${c.content}`)
-    .join('\n\n');
-
-  const toScore = listings.slice(0, MAX_SCORED_PER_RUN);
-  if (listings.length > toScore.length) {
-    console.log(`Scoring capped at ${MAX_SCORED_PER_RUN}; ${listings.length - toScore.length} left unscored this run.`);
-  }
+  const profileTerms = terms(chunks.map((c) => `${c.title} ${c.content}`).join(' '));
+  if (!profileTerms.size) return;
 
   let scored = 0;
-  for (const l of toScore) {
-    try {
-      const response = await anthropic.messages.create({
-        model: 'claude-opus-4-8',
-        max_tokens: 1024,
-        output_config: {
-          effort: 'low',
-          format: { type: 'json_schema', schema: SCORE_SCHEMA },
-        },
-        system:
-          'You score how well a job listing fits a candidate, as a number from 0 (no fit) to 100 (ideal fit). ' +
-          'Consider required skills vs the candidate profile, seniority level, and role type. ' +
-          'Be honest: a role requiring 8 years of experience scores low for an early-career candidate.',
-        messages: [
-          {
-            role: 'user',
-            content:
-              `CANDIDATE PROFILE:\n${profile}\n\n` +
-              `JOB LISTING:\n${l.role} at ${l.company}` +
-              (l.location ? ` (${l.location})` : '') +
-              (l.description ? `\n\n${l.description}` : '\n\n(no description available — score from the title alone)'),
-          },
-        ],
-      });
-      const text = response.content.find((b) => b.type === 'text')?.text;
-      const { score, reason } = JSON.parse(text);
-      const { error: uErr } = await supabase
-        .from('job_listings')
-        .update({ fit_score: score, fit_reason: reason })
-        .eq('id', l.id);
-      if (uErr) throw new Error(uErr.message);
-      scored++;
-    } catch (e) {
-      console.warn(`scoring "${l.role} at ${l.company}" failed: ${e.message}`);
-    }
+  for (const l of listings) {
+    const jobTerms = terms(`${l.role} ${l.description ?? ''}`);
+    const matched = [...profileTerms].filter((t) => jobTerms.has(t));
+    const score = Math.min(100, Math.round((100 * matched.length) / profileTerms.size));
+    const top = matched.slice(0, 8).join(', ');
+    const reason = matched.length
+      ? `Keyword match: ${matched.length} profile terms found (${top})`
+      : 'No profile terms found in this listing';
+    const { error: uErr } = await supabase
+      .from('job_listings')
+      .update({ fit_score: score, fit_reason: reason })
+      .eq('id', l.id);
+    if (uErr) console.warn(`scoring "${l.role}" failed: ${uErr.message}`);
+    else scored++;
   }
-  console.log(`${scored}/${toScore.length} new listings fit-scored.`);
+  console.log(`${scored}/${listings.length} new listings keyword-scored.`);
 }
 
 main().catch((e) => {

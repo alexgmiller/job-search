@@ -114,10 +114,12 @@ async function tailorResume(listingId) {
 
   const Anthropic = require('@anthropic-ai/sdk');
   const anthropic = new Anthropic();
+  // Haiku 4.5: a few cents per resume; thinking uses the budget_tokens form
+  // (adaptive is not supported on Haiku).
   const response = await anthropic.messages.create({
-    model: 'claude-opus-4-8',
+    model: 'claude-haiku-4-5',
     max_tokens: 16000,
-    thinking: { type: 'adaptive' },
+    thinking: { type: 'enabled', budget_tokens: 4000 },
     system: TAILOR_SYSTEM,
     messages: [
       {
