@@ -1,0 +1,14 @@
+{
+  "name": "job-search-scraper",
+  "version": "1.0.0",
+  "description": "Finds new job listings and inserts them into the Supabase job_listings table",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dry-run": "node index.js --dry-run"
+  },
+  "private": true,
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.0"
+  }
+}

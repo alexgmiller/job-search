@@ -1,0 +1,10 @@
+[
+  { "name": "Discord", "source": "greenhouse", "slug": "discord" },
+  { "name": "Reddit", "source": "greenhouse", "slug": "reddit" },
+  { "name": "Robinhood", "source": "greenhouse", "slug": "robinhood" },
+  { "name": "Figma", "source": "greenhouse", "slug": "figma" },
+  { "name": "Stripe", "source": "greenhouse", "slug": "stripe" },
+  { "name": "Duolingo", "source": "greenhouse", "slug": "duolingo" },
+  { "name": "GitLab", "source": "greenhouse", "slug": "gitlab" },
+  { "name": "Plaid", "source": "lever", "slug": "plaid" }
+]

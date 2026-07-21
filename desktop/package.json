@@ -1,0 +1,16 @@
+{
+  "name": "job-search-desktop",
+  "version": "1.0.0",
+  "description": "Desktop companion for the job-listing Supabase table: unseen list + native notifications",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "private": true,
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.0"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0"
+  }
+}
