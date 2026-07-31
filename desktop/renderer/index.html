@@ -293,6 +293,19 @@
       color: #fff;
     }
     #filter-row { padding: 0 16px 10px; }
+    #region-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 6px; }
+    .region-chip {
+      border: 1px solid #d5d9df;
+      background: #fff;
+      color: #555;
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+    }
+    .region-chip.on { background: #1c7c43; border-color: #1c7c43; color: #fff; }
+    body.widget #region-chips { gap: 3px; margin-bottom: 4px; }
+    body.widget .region-chip { font-size: 10px; padding: 2px 7px; }
     #loc-filter {
       width: 100%;
       padding: 6px 10px;
@@ -318,6 +331,7 @@
       font-size: 12px;
     }
     #add-form .row { display: flex; gap: 6px; justify-content: flex-end; }
+    #add-region-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 6px; }
     #add-form button {
       border: none;
       border-radius: 6px;
@@ -468,12 +482,14 @@
   <div id="views"></div>
   <div id="tabs"></div>
   <div id="filter-row">
-    <input id="loc-filter" placeholder="Filter visible listings by location (e.g. Sacramento, Remote)" />
+    <div id="region-chips"></div>
+    <input id="loc-filter" placeholder="…and/or filter by text (city, state, company)" />
   </div>
   <div id="add-form">
     <input id="add-label" placeholder="Tab name (e.g. Data Analyst)" />
     <input id="add-keywords" placeholder="Keywords, comma-separated (e.g. data analyst, analytics)" />
-    <input id="add-locations" placeholder="Locations, comma-separated (e.g. Sacramento, Remote) — blank = anywhere" />
+    <div id="add-region-chips"></div>
+    <input id="add-locations" placeholder="Extra locations, comma-separated (optional) — blank + no regions = anywhere" />
     <div class="row">
       <button id="add-delete">Delete tab</button>
       <button id="add-cancel">Cancel</button>
@@ -526,6 +542,7 @@
     <button id="widget-btn">Widget mode</button>
     <button id="quit">Quit</button>
   </footer>
+  <script src="../../shared/locations.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

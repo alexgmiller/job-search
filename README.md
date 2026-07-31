@@ -5,12 +5,23 @@ schedule, a desktop app shows unseen ones with native notifications.
 
 ## Scraper — `scraper/`
 
-Node script that pulls open roles from Greenhouse/Lever boards
-([scraper/companies.json](scraper/companies.json) — edit freely) and,
-when `RAPIDAPI_KEY` is set, Indeed/LinkedIn/Glassdoor via the JSearch
-API. Matches titles/locations against the `searches` table (the role
-tabs), inserts with the service-role key. Dedupe is a unique index on
-`url`, so re-runs are always safe and dismissed listings never return.
+Node script that pulls open roles from 26 Greenhouse/Lever boards
+([scraper/companies.json](scraper/companies.json) — edit freely) plus
+Remotive (free, no key), and — when their free keys are set — USAJobs,
+Adzuna, and JSearch. Matches titles/locations against the `searches`
+table (the role tabs), inserts with the service-role key. Dedupe is a
+unique index on `url`, so re-runs are safe and dismissed listings never
+return.
+
+**Location matching** lives in [shared/locations.js](shared/locations.js)
+and is used by both the scraper and the app. It parses messy board
+strings — `San Francisco, CA • New York, NY • United States`,
+`Remote - Ontario, Canada`, `San Francisco Bay Area or Los Angeles Area` —
+into parts, then matches named regions: `sacramento`, `bay-area`,
+`california`, `us-remote`, `us`. Crucially it distinguishes
+`Remote - United States` from `Remote, United Kingdom`, which a substring
+test cannot. Put region keys in a search's `locations` array (the tab
+editor has chips for them); free-text entries still work as substrings.
 
 Runs every 3 hours via GitHub Actions
 ([.github/workflows/scrape.yml](.github/workflows/scrape.yml)). Repo

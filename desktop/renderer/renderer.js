@@ -22,6 +22,8 @@ let activeView = 'new';
 let activeTab = 'all'; // 'all' | a search id
 let locationFilter = '';
 let editingSearchId = null;
+// Region keys currently toggled on in the filter row; empty = no region filter.
+const activeRegions = new Set();
 
 function showError(msg) {
   errorEl.textContent = msg;
@@ -77,11 +79,43 @@ function renderViews() {
   }
 }
 
+// Region chips inside the tab editor; selections become `searches.locations`
+// entries, which the scraper turns into API location queries.
+const REGION_KEYS = Object.keys(window.JobLocations.REGION_LABELS);
+const formRegions = new Set();
+const addRegionChipsEl = document.getElementById('add-region-chips');
+const regionChipEls = {};
+for (const [key, label] of Object.entries(window.JobLocations.REGION_LABELS)) {
+  const chip = document.createElement('button');
+  chip.className = 'region-chip';
+  chip.textContent = label;
+  chip.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (formRegions.has(key)) formRegions.delete(key);
+    else formRegions.add(key);
+    chip.classList.toggle('on', formRegions.has(key));
+  });
+  regionChipEls[key] = chip;
+  addRegionChipsEl.appendChild(chip);
+}
+
+function setFormRegions(locations = []) {
+  formRegions.clear();
+  for (const l of locations) if (REGION_KEYS.includes(l)) formRegions.add(l);
+  for (const [key, chip] of Object.entries(regionChipEls)) {
+    chip.classList.toggle('on', formRegions.has(key));
+  }
+}
+
 function openForm(search) {
   editingSearchId = search ? search.id : null;
   document.getElementById('add-label').value = search?.label ?? '';
   document.getElementById('add-keywords').value = (search?.keywords ?? []).join(', ');
-  document.getElementById('add-locations').value = (search?.locations ?? []).join(', ');
+  setFormRegions(search?.locations ?? []);
+  // Free-text locations are anything that isn't a known region key.
+  document.getElementById('add-locations').value = (search?.locations ?? [])
+    .filter((l) => !REGION_KEYS.includes(l))
+    .join(', ');
   addDeleteBtn.style.display = search ? 'inline-block' : 'none';
   addSaveBtn.textContent = search ? 'Save changes' : 'Add role';
   addFormEl.style.display = 'block';
@@ -145,6 +179,14 @@ function visibleListings() {
   let listings = inView(activeView);
   if (activeTab !== 'all') {
     listings = listings.filter((l) => l.search_id === activeTab);
+  }
+  // Region chips use the shared parser (handles multi-location strings and
+  // remote-but-wrong-country); the text box is a plain substring on top.
+  if (activeRegions.size) {
+    const targets = [...activeRegions];
+    listings = listings.filter((l) =>
+      window.JobLocations.matchesLocation(l.location, targets)
+    );
   }
   if (locationFilter) {
     const f = locationFilter.toLowerCase();
@@ -390,6 +432,22 @@ window.api.getSearches().then((s) => {
   rerender();
 });
 
+// Region filter chips, built from the shared region list.
+const regionChipsEl = document.getElementById('region-chips');
+for (const [key, label] of Object.entries(window.JobLocations.REGION_LABELS)) {
+  const chip = document.createElement('button');
+  chip.className = 'region-chip';
+  chip.textContent = label;
+  chip.title = `Show only listings in ${label}`;
+  chip.addEventListener('click', () => {
+    if (activeRegions.has(key)) activeRegions.delete(key);
+    else activeRegions.add(key);
+    chip.classList.toggle('on', activeRegions.has(key));
+    renderList();
+  });
+  regionChipsEl.appendChild(chip);
+}
+
 locFilterEl.addEventListener('input', () => {
   locationFilter = locFilterEl.value.trim();
   renderList();
@@ -424,7 +482,7 @@ addSaveBtn.addEventListener('click', async () => {
   const toList = (id) =>
     document.getElementById(id).value.split(',').map((s) => s.trim()).filter(Boolean);
   const keywords = toList('add-keywords');
-  const locations = toList('add-locations');
+  const locations = [...formRegions, ...toList('add-locations')];
 
   if (!label || !keywords.length) {
     showError('A tab needs a name and at least one keyword.');

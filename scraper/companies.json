@@ -1,4 +1,21 @@
 [
+  { "name": "Waymo", "source": "greenhouse", "slug": "waymo" },
+  { "name": "Anthropic", "source": "greenhouse", "slug": "anthropic" },
+  { "name": "Samsara", "source": "greenhouse", "slug": "samsara" },
+  { "name": "Databricks", "source": "greenhouse", "slug": "databricks" },
+  { "name": "Affirm", "source": "greenhouse", "slug": "affirm" },
+  { "name": "Coinbase", "source": "greenhouse", "slug": "coinbase" },
+  { "name": "Verkada", "source": "greenhouse", "slug": "verkada" },
+  { "name": "Instacart", "source": "greenhouse", "slug": "instacart" },
+  { "name": "Scale AI", "source": "greenhouse", "slug": "scaleai" },
+  { "name": "Chime", "source": "greenhouse", "slug": "chime" },
+  { "name": "Gusto", "source": "greenhouse", "slug": "gusto" },
+  { "name": "Lyft", "source": "greenhouse", "slug": "lyft" },
+  { "name": "Checkr", "source": "greenhouse", "slug": "checkr" },
+  { "name": "Asana", "source": "greenhouse", "slug": "asana" },
+  { "name": "Airtable", "source": "greenhouse", "slug": "airtable" },
+  { "name": "SoFi", "source": "greenhouse", "slug": "sofi" },
+  { "name": "Cloudflare", "source": "greenhouse", "slug": "cloudflare" },
   { "name": "Discord", "source": "greenhouse", "slug": "discord" },
   { "name": "Reddit", "source": "greenhouse", "slug": "reddit" },
   { "name": "Robinhood", "source": "greenhouse", "slug": "robinhood" },
@@ -6,5 +23,6 @@
   { "name": "Stripe", "source": "greenhouse", "slug": "stripe" },
   { "name": "Duolingo", "source": "greenhouse", "slug": "duolingo" },
   { "name": "GitLab", "source": "greenhouse", "slug": "gitlab" },
-  { "name": "Plaid", "source": "lever", "slug": "plaid" }
+  { "name": "Veeva", "source": "lever", "slug": "veeva" },
+  { "name": "Palantir", "source": "lever", "slug": "palantir" }
 ]

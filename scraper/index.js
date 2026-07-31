@@ -21,6 +21,7 @@ if (fs.existsSync(envPath)) {
 }
 
 const { createClient } = require('@supabase/supabase-js');
+const { matchesLocation, REGION_QUERIES } = require('../shared/locations');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -92,17 +93,36 @@ async function fetchLever({ name, slug }) {
   }));
 }
 
+// Turn a search's region keys into concrete place strings for APIs that
+// take a location parameter. Remote-only regions yield no place.
+function placesFor(search, field = 'where') {
+  const places = [];
+  let remoteOnly = false;
+  for (const l of search.locations ?? []) {
+    const q = REGION_QUERIES[l];
+    if (q) {
+      if (q[field]) places.push(q[field]);
+      if (q.remoteOnly) remoteOnly = true;
+    } else {
+      places.push(l); // free-text city/state
+    }
+  }
+  return { places, remoteOnly };
+}
+
 // JSearch aggregates Indeed/LinkedIn/Glassdoor. One request per search per
 // location keeps well inside the free tier at a few runs per day.
 async function fetchJSearch(search) {
-  const locations = search.locations.length ? search.locations : [''];
+  const { places, remoteOnly } = placesFor(search);
+  const locations = places.length ? places : [''];
   const results = [];
   for (const loc of locations) {
     const query = [search.keywords[0] ?? search.label, loc].filter(Boolean).join(' in ');
     const url =
       'https://jsearch.p.rapidapi.com/search?query=' +
       encodeURIComponent(query) +
-      '&num_pages=1&date_posted=3days';
+      '&num_pages=1&date_posted=3days' +
+      (remoteOnly && !loc ? '&remote_jobs_only=true' : '');
     const res = await fetch(url, {
       headers: {
         'X-RapidAPI-Key': RAPIDAPI_KEY,
@@ -126,19 +146,106 @@ async function fetchJSearch(search) {
   return results;
 }
 
+// Remotive: free, no key, remote-only listings.
+async function fetchRemotive(search) {
+  const results = [];
+  for (const kw of search.keywords.slice(0, 3)) {
+    const res = await fetch(
+      'https://remotive.com/api/remote-jobs?limit=50&search=' + encodeURIComponent(kw)
+    );
+    if (!res.ok) throw new Error(`remotive "${kw}": HTTP ${res.status}`);
+    const { jobs } = await res.json();
+    for (const j of jobs ?? []) {
+      results.push({
+        company: j.company_name ?? 'Unknown',
+        role: j.title,
+        // Remotive states eligibility regions, e.g. "USA", "Americas".
+        location: `Remote${j.candidate_required_location ? ` - ${j.candidate_required_location}` : ''}`,
+        url: j.url,
+        description: htmlToText(j.description),
+      });
+    }
+  }
+  return results;
+}
+
+// USAJobs: free federal API, real location search. Heavy in IT support.
+// Needs USAJOBS_API_KEY + USAJOBS_EMAIL (free at developer.usajobs.gov).
+async function fetchUSAJobs(search) {
+  const { places } = placesFor(search, 'usajobs');
+  const locations = places.length ? places : [''];
+  const results = [];
+  for (const kw of search.keywords.slice(0, 3)) {
+    for (const loc of locations) {
+      const url =
+        'https://data.usajobs.gov/api/search?ResultsPerPage=50&Keyword=' +
+        encodeURIComponent(kw) +
+        (loc ? '&LocationName=' + encodeURIComponent(loc) : '');
+      const res = await fetch(url, {
+        headers: {
+          Host: 'data.usajobs.gov',
+          'User-Agent': process.env.USAJOBS_EMAIL,
+          'Authorization-Key': process.env.USAJOBS_API_KEY,
+        },
+      });
+      if (!res.ok) throw new Error(`usajobs "${kw}": HTTP ${res.status}`);
+      const body = await res.json();
+      for (const item of body.SearchResult?.SearchResultItems ?? []) {
+        const d = item.MatchedObjectDescriptor ?? {};
+        results.push({
+          company: d.OrganizationName ?? 'US Government',
+          role: d.PositionTitle,
+          location: (d.PositionLocationDisplay ?? '').slice(0, 200) || null,
+          url: d.PositionURI,
+          description: (d.UserArea?.Details?.JobSummary ?? d.QualificationSummary ?? '')
+            .slice(0, 6000) || null,
+        });
+      }
+    }
+  }
+  return results;
+}
+
+// Adzuna: free-tier aggregator with true location + radius search.
+// Needs ADZUNA_APP_ID + ADZUNA_APP_KEY (free at developer.adzuna.com).
+async function fetchAdzuna(search) {
+  const { places } = placesFor(search);
+  const locations = places.length ? places : [''];
+  const results = [];
+  for (const kw of search.keywords.slice(0, 3)) {
+    for (const loc of locations) {
+      const url =
+        'https://api.adzuna.com/v1/api/jobs/us/search/1' +
+        `?app_id=${encodeURIComponent(process.env.ADZUNA_APP_ID)}` +
+        `&app_key=${encodeURIComponent(process.env.ADZUNA_APP_KEY)}` +
+        '&results_per_page=50&max_days_old=7&content-type=application/json' +
+        '&what=' + encodeURIComponent(kw) +
+        (loc ? '&where=' + encodeURIComponent(loc) + '&distance=40' : '');
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`adzuna "${kw}": HTTP ${res.status}`);
+      const body = await res.json();
+      for (const j of body.results ?? []) {
+        results.push({
+          company: j.company?.display_name ?? 'Unknown',
+          role: j.title,
+          location: j.location?.display_name ?? null,
+          url: j.redirect_url,
+          description: (j.description ?? '').slice(0, 6000) || null,
+        });
+      }
+    }
+  }
+  return results;
+}
+
 // ---------- matching ----------
 
 function matchesSearch(listing, search) {
   const title = listing.role.toLowerCase();
   if (!search.keywords.some((k) => title.includes(k.toLowerCase()))) return false;
-
-  if (search.locations.length === 0) return true;
-  const loc = (listing.location ?? '').toLowerCase();
-  return search.locations.some((l) => {
-    const want = l.toLowerCase();
-    if (want === 'remote') return loc.includes('remote');
-    return loc.includes(want);
-  });
+  // Region-aware: understands multi-location strings, metro names, and
+  // remote-but-wrong-country listings. Empty locations = anywhere.
+  return matchesLocation(listing.location, search.locations);
 }
 
 // ---------- main ----------
@@ -166,18 +273,44 @@ async function main() {
     }
   }
 
-  if (RAPIDAPI_KEY) {
+  // Per-search sources. Each is skipped (with a note) when its key is
+  // missing, so the scraper degrades gracefully instead of failing.
+  const perSearch = [
+    { name: 'Remotive', fn: fetchRemotive, ready: true },
+    {
+      name: 'USAJobs',
+      fn: fetchUSAJobs,
+      ready: !!(process.env.USAJOBS_API_KEY && process.env.USAJOBS_EMAIL),
+      missing: 'USAJOBS_API_KEY + USAJOBS_EMAIL (free at developer.usajobs.gov)',
+    },
+    {
+      name: 'Adzuna',
+      fn: fetchAdzuna,
+      ready: !!(process.env.ADZUNA_APP_ID && process.env.ADZUNA_APP_KEY),
+      missing: 'ADZUNA_APP_ID + ADZUNA_APP_KEY (free at developer.adzuna.com)',
+    },
+    {
+      name: 'JSearch',
+      fn: fetchJSearch,
+      ready: !!RAPIDAPI_KEY,
+      missing: 'RAPIDAPI_KEY (JSearch on rapidapi.com)',
+    },
+  ];
+
+  for (const src of perSearch) {
+    if (!src.ready) {
+      console.log(`${src.name} skipped — set ${src.missing}.`);
+      continue;
+    }
     for (const s of searches) {
       try {
-        const jobs = await fetchJSearch(s);
-        console.log(`JSearch "${s.label}": ${jobs.length} results`);
+        const jobs = await src.fn(s);
+        console.log(`${src.name} "${s.label}": ${jobs.length} results`);
         listings.push(...jobs);
       } catch (e) {
-        console.warn(`skipping JSearch "${s.label}": ${e.message}`);
+        console.warn(`skipping ${src.name} "${s.label}": ${e.message}`);
       }
     }
-  } else {
-    console.log('RAPIDAPI_KEY not set — skipping Indeed/LinkedIn (JSearch).');
   }
 
   // First matching search claims the listing; url dedupe handles the rest.
