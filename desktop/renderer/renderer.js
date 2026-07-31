@@ -583,4 +583,19 @@ document.getElementById('chunk-save').addEventListener('click', async () => {
   }
 });
 
+// ---------- window mode ----------
+
+const isWidget = new URLSearchParams(location.search).get('mode') === 'widget';
+if (isWidget) document.body.classList.add('widget');
+
+document.getElementById('widget-btn').addEventListener('click', () =>
+  window.api.setMode('widget')
+);
+document.getElementById('expand-btn').addEventListener('click', () =>
+  window.api.setMode('full')
+);
+document.getElementById('hide-btn').addEventListener('click', () =>
+  window.api.minimize()
+);
+
 document.getElementById('quit').addEventListener('click', () => window.api.quit());

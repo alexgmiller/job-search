@@ -40,6 +40,27 @@ let win = null;
 let tray = null;
 let quitting = false;
 
+// Window mode + widget geometry persist across restarts.
+const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+
+function loadSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  } catch {
+    return { mode: 'full', widgetBounds: null };
+  }
+}
+
+function saveSettings(patch) {
+  const next = { ...loadSettings(), ...patch };
+  try {
+    fs.writeFileSync(settingsPath, JSON.stringify(next, null, 2));
+  } catch {
+    // Settings are a convenience; a failed write shouldn't break the app.
+  }
+  return next;
+}
+
 // Ids already shown to the user, so background polls only notify about
 // genuinely new rows. Seeded (without notifying) on the first poll.
 const knownIds = new Set();
@@ -202,11 +223,22 @@ function showWindow() {
   win.focus();
 }
 
-function createWindow() {
+function createWindow(mode = loadSettings().mode ?? 'full') {
+  const widget = mode === 'widget';
+  const saved = loadSettings().widgetBounds;
+
   win = new BrowserWindow({
-    width: 560,
-    height: 680,
+    width: widget ? (saved?.width ?? 340) : 560,
+    height: widget ? (saved?.height ?? 460) : 680,
+    x: widget ? saved?.x : undefined,
+    y: widget ? saved?.y : undefined,
     show: false,
+    frame: !widget,
+    alwaysOnTop: widget,
+    skipTaskbar: widget,
+    resizable: true,
+    minWidth: widget ? 260 : 420,
+    minHeight: 320,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -214,10 +246,20 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  // The renderer reads ?mode= to switch to the compact widget layout.
+  win.loadFile(path.join(__dirname, 'renderer', 'index.html'), {
+    query: { mode },
+  });
   win.once('ready-to-show', () => {
     if (!SMOKE_TEST) win.show();
   });
+
+  if (widget) {
+    const remember = () => saveSettings({ widgetBounds: win.getBounds() });
+    win.on('moved', remember);
+    win.on('resized', remember);
+  }
+
   // Closing the window keeps the app alive in the tray so background
   // polling and notifications continue.
   win.on('close', (e) => {
@@ -226,6 +268,68 @@ function createWindow() {
       win.hide();
     }
   });
+}
+
+// Frameless/always-on-top can't be toggled on a live window — rebuild it.
+function setMode(mode) {
+  if (win && !win.isDestroyed() && loadSettings().mode === 'widget') {
+    saveSettings({ widgetBounds: win.getBounds() });
+  }
+  saveSettings({ mode });
+  const old = win;
+  createWindow(mode);
+  if (old && !old.isDestroyed()) old.destroy();
+  buildTrayMenu();
+}
+
+function isAutoLaunchEnabled() {
+  return app.getLoginItemSettings({
+    path: process.execPath,
+    args: [app.getAppPath()],
+  }).openAtLogin;
+}
+
+function setAutoLaunch(enabled) {
+  // Unpackaged dev runs launch electron.exe with the app dir as its argument.
+  app.setLoginItemSettings({
+    openAtLogin: enabled,
+    path: process.execPath,
+    args: [app.getAppPath()],
+  });
+  buildTrayMenu();
+}
+
+function buildTrayMenu() {
+  if (!tray) return;
+  const { mode } = loadSettings();
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Open', click: showWindow },
+      { type: 'separator' },
+      {
+        label: 'Widget mode (small, always on top)',
+        type: 'radio',
+        checked: mode === 'widget',
+        click: () => setMode('widget'),
+      },
+      {
+        label: 'Full window',
+        type: 'radio',
+        checked: mode !== 'widget',
+        click: () => setMode('full'),
+      },
+      { type: 'separator' },
+      {
+        label: 'Start automatically at login',
+        type: 'checkbox',
+        checked: isAutoLaunchEnabled(),
+        click: (item) => setAutoLaunch(item.checked),
+      },
+      { label: `Checking every ${POLL_MINUTES} min`, enabled: false },
+      { type: 'separator' },
+      { label: 'Quit', click: () => app.quit() },
+    ])
+  );
 }
 
 const gotLock = app.requestSingleInstanceLock();
@@ -239,17 +343,12 @@ if (!gotLock) {
 
     tray = new Tray(trayIcon());
     tray.setToolTip('Job Search');
-    tray.setContextMenu(
-      Menu.buildFromTemplate([
-        { label: 'Open', click: showWindow },
-        { label: `Checking every ${POLL_MINUTES} min`, enabled: false },
-        { type: 'separator' },
-        { label: 'Quit', click: () => app.quit() },
-      ])
-    );
+    buildTrayMenu();
     tray.on('click', showWindow);
 
     ipcMain.handle('refresh', () => poll());
+    ipcMain.handle('set-mode', (_e, mode) => setMode(mode));
+    ipcMain.handle('minimize', () => win?.hide());
     ipcMain.handle('get-searches', () => fetchSearches());
     ipcMain.handle('add-search', async (_e, { label, keywords, locations }) => {
       if (!supabase) throw new Error('Supabase not configured');

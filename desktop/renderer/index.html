@@ -151,6 +151,55 @@
       color: #444;
     }
     #tailor-copy, #tailor-save { background: #2f8ad6; color: #fff; }
+
+    /* ---- widget mode: compact, frameless, draggable ---- */
+    body.widget { border: 1px solid #d5d9df; border-radius: 10px; overflow: hidden; }
+    body.widget header {
+      padding: 8px 10px;
+      -webkit-app-region: drag; /* frameless window has no title bar to grab */
+    }
+    body.widget header button,
+    body.widget header h1 { -webkit-app-region: no-drag; }
+    body.widget h1 { font-size: 14px; }
+    body.widget #refresh, body.widget #profile-btn {
+      padding: 4px 9px;
+      font-size: 11px;
+      margin-right: 4px;
+    }
+    body.widget #views { padding: 0 10px 6px; gap: 3px; }
+    body.widget .view { font-size: 10px; padding: 4px 0; border-radius: 6px; }
+    body.widget #tabs { padding: 0 10px 6px; gap: 4px; }
+    body.widget .tab { font-size: 10px; padding: 3px 8px; }
+    body.widget #filter-row { padding: 0 10px 6px; }
+    body.widget #loc-filter { font-size: 11px; padding: 4px 8px; }
+    body.widget #list { padding: 0 10px 10px; }
+    body.widget .card { padding: 9px 10px; border-radius: 8px; }
+    body.widget .role { font-size: 12px; }
+    body.widget .company { font-size: 11px; }
+    body.widget .meta { font-size: 10px; }
+    /* Action buttons are hidden in the widget to keep cards scannable —
+       the ✕ and the fit badge stay. Open the full window to apply/tailor. */
+    body.widget .apply-btn,
+    body.widget .seen-btn,
+    body.widget .tailor-btn,
+    body.widget .notes-btn { display: none; }
+    body.widget .dismiss { width: 22px; height: 22px; font-size: 11px; }
+    body.widget .fit-badge { font-size: 10px; padding: 2px 6px; }
+    body.widget footer { padding: 5px 10px; font-size: 10px; }
+    body.widget #footer-hint { display: none; }
+    #expand-btn, #hide-btn { display: none; }
+    body.widget #expand-btn, body.widget #hide-btn {
+      display: inline-block;
+      border: 1px solid #d5d9df;
+      background: #fff;
+      color: #444;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      margin-right: 4px;
+      -webkit-app-region: no-drag;
+    }
     #views {
       display: flex;
       gap: 4px;
@@ -343,7 +392,7 @@
       justify-content: space-between;
       border-top: 1px solid #e5e7eb;
     }
-    #quit {
+    #quit, #widget-btn {
       background: none;
       border: none;
       color: #888;
@@ -351,12 +400,15 @@
       cursor: pointer;
       text-decoration: underline;
     }
+    footer > :last-child { margin-left: 10px; }
   </style>
 </head>
 <body>
   <header>
     <h1>New Listings</h1>
     <div>
+      <button id="expand-btn" title="Switch to the full window">⤢</button>
+      <button id="hide-btn" title="Hide to tray">–</button>
       <button id="profile-btn">Profile</button>
       <button id="refresh">Refresh</button>
     </div>
@@ -407,7 +459,8 @@
     </div>
   </div>
   <footer>
-    <span>Closing this window keeps notifications running (tray)</span>
+    <span id="footer-hint">Closing this window keeps notifications running (tray)</span>
+    <button id="widget-btn">Widget mode</button>
     <button id="quit">Quit</button>
   </footer>
   <script src="renderer.js"></script>
