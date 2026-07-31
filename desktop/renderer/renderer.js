@@ -565,6 +565,111 @@ function setProfileOpen(open) {
 
 profileBtn.addEventListener('click', () => setProfileOpen(!profileOpen));
 
+// ---------- resume import (review before saving) ----------
+
+const KINDS = ['experience', 'education', 'skill', 'project', 'certification', 'other'];
+const importReview = document.getElementById('import-review');
+const importStatus = document.getElementById('import-status');
+const importList = document.getElementById('import-list');
+const importActions = document.getElementById('import-actions');
+
+function renderImportRows(chunks) {
+  importList.replaceChildren();
+  for (const c of chunks) {
+    const row = document.createElement('div');
+    row.className = 'imp';
+
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    // Contact-header junk is usually the only 'other' — leave it unchecked.
+    check.checked = c.kind !== 'other';
+
+    const fields = document.createElement('div');
+    fields.className = 'imp-fields';
+
+    const top = document.createElement('div');
+    top.className = 'imp-row';
+
+    const kind = document.createElement('select');
+    kind.className = 'imp-kind';
+    for (const k of KINDS) {
+      const opt = document.createElement('option');
+      opt.value = k;
+      opt.textContent = k;
+      if (k === c.kind) opt.selected = true;
+      kind.appendChild(opt);
+    }
+
+    const title = document.createElement('input');
+    title.type = 'text';
+    title.value = c.title;
+
+    top.append(kind, title);
+
+    const content = document.createElement('textarea');
+    content.value = c.content;
+
+    fields.append(top, content);
+    row.append(check, fields);
+    importList.appendChild(row);
+
+    row._read = () => ({
+      selected: check.checked,
+      kind: kind.value,
+      title: title.value.trim(),
+      content: content.value.trim(),
+    });
+  }
+}
+
+document.getElementById('import-btn').addEventListener('click', async () => {
+  importReview.style.display = 'block';
+  importActions.style.display = 'none';
+  importList.replaceChildren();
+  importStatus.textContent = 'Choose a file…';
+  try {
+    const result = await window.api.importResume();
+    if (!result) {
+      importReview.style.display = 'none';
+      return;
+    }
+    importStatus.textContent =
+      `Found ${result.chunks.length} entries in ${result.fileName}` +
+      (result.method === 'headings'
+        ? ' (parsed by section headings — no API key set).'
+        : '.') +
+      ' Review and edit below, then add the ones you want.';
+    renderImportRows(result.chunks);
+    importActions.style.display = 'flex';
+  } catch (e) {
+    importStatus.textContent = `Import failed: ${e.message}`;
+  }
+});
+
+document.getElementById('import-cancel').addEventListener('click', () => {
+  importReview.style.display = 'none';
+  importList.replaceChildren();
+});
+
+document.getElementById('import-save').addEventListener('click', async () => {
+  const picked = [...importList.children]
+    .map((row) => row._read())
+    .filter((c) => c.selected && c.title && c.content)
+    .map(({ kind, title, content }) => ({ kind, title, content }));
+  if (!picked.length) {
+    importStatus.textContent = 'Nothing selected.';
+    return;
+  }
+  try {
+    renderChunks(await window.api.addChunks(picked));
+    importReview.style.display = 'none';
+    importList.replaceChildren();
+    clearError();
+  } catch (e) {
+    importStatus.textContent = `Could not save: ${e.message}`;
+  }
+});
+
 document.getElementById('chunk-save').addEventListener('click', async () => {
   const kind = document.getElementById('chunk-kind').value;
   const title = document.getElementById('chunk-title').value.trim();

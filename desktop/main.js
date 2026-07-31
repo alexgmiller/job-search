@@ -92,6 +92,151 @@ async function fetchProfile() {
   return data ?? [];
 }
 
+// ---------- resume import ----------
+
+async function extractResumeText(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.pdf') {
+    const { PDFParse } = require('pdf-parse');
+    const parser = new PDFParse({ data: new Uint8Array(fs.readFileSync(filePath)) });
+    try {
+      const { text } = await parser.getText();
+      // Strip the "-- 1 of 3 --" page separators pdf-parse injects.
+      return (text ?? '').replace(/^\s*--\s*\d+\s+of\s+\d+\s*--\s*$/gm, '');
+    } finally {
+      await parser.destroy();
+    }
+  }
+  if (ext === '.docx') {
+    const mammoth = require('mammoth');
+    const { value } = await mammoth.extractRawText({ path: filePath });
+    return value ?? '';
+  }
+  if (ext === '.txt' || ext === '.md') return fs.readFileSync(filePath, 'utf8');
+  throw new Error(`Unsupported file type: ${ext} (use PDF, DOCX, TXT, or MD)`);
+}
+
+const KIND_ENUM = [
+  'experience',
+  'education',
+  'skill',
+  'project',
+  'certification',
+  'other',
+];
+
+const IMPORT_SCHEMA = {
+  type: 'object',
+  properties: {
+    chunks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: KIND_ENUM },
+          title: { type: 'string', description: 'Short label, e.g. "IT Support Intern — Acme, 2025"' },
+          content: { type: 'string', description: 'The details for this entry' },
+        },
+        required: ['kind', 'title', 'content'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['chunks'],
+  additionalProperties: false,
+};
+
+const IMPORT_SYSTEM = `You split a resume into structured profile chunks.
+
+Rules:
+- One chunk per distinct job, degree, project, or certification.
+- For skills, group into a few themed chunks (e.g. "IT / Systems",
+  "Programming Languages", "Tools & Platforms") rather than one giant blob
+  or one chunk per word. List the individual skills inside "content",
+  comma-separated, keeping the exact tool and technology names — these
+  terms are matched against job postings, so preserve them verbatim.
+- Copy content from the resume. Do not invent, embellish, or add skills
+  that are not written there.
+- Skip contact details, addresses, and section headers themselves.
+- "title" is a short human label; "content" holds the detail (bullets,
+  descriptions, skill lists).`;
+
+// Free fallback when no API key is set: split on ALL-CAPS / Title-Case
+// section headers and keep each section as one chunk.
+function heuristicChunks(text) {
+  const KINDS = [
+    [/^(work\s+)?experience|employment|professional/i, 'experience'],
+    [/^education|academic/i, 'education'],
+    [/^(technical\s+)?skills|competencies|proficienc/i, 'skill'],
+    [/^projects?/i, 'project'],
+    [/^certification|licen[cs]e/i, 'certification'],
+  ];
+  const lines = text.split(/\r?\n/);
+  const chunks = [];
+  let current = null;
+
+  const isHeader = (line) => {
+    const t = line.trim();
+    if (!t || t.length > 40) return false;
+    // A header is short, has no sentence punctuation, and is ALL CAPS
+    // (or matches a known section name).
+    if (/[.;:,]$/.test(t)) return false;
+    const alpha = t.replace(/[^A-Za-z]/g, '');
+    if (alpha.length < 3) return false;
+    return alpha === alpha.toUpperCase() || KINDS.some(([re]) => re.test(t));
+  };
+
+  for (const line of lines) {
+    if (isHeader(line)) {
+      if (current?.content.trim()) chunks.push(current);
+      const label = line.trim();
+      const kind = KINDS.find(([re]) => re.test(label))?.[1] ?? 'other';
+      current = { kind, title: label, content: '' };
+    } else if (current && line.trim()) {
+      current.content += line.trim() + '\n';
+    }
+  }
+  if (current?.content.trim()) chunks.push(current);
+  return chunks
+    .map((c) => ({ ...c, content: c.content.trim() }))
+    .filter((c) => c.content.length > 10);
+}
+
+async function parseResume(filePath) {
+  const text = (await extractResumeText(filePath)).trim();
+  if (!text) throw new Error('No text found in that file (is the PDF a scan?)');
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    const chunks = heuristicChunks(text);
+    if (!chunks.length) {
+      throw new Error(
+        'Could not detect resume sections. Add an ANTHROPIC_API_KEY to desktop/.env for smarter parsing, or add chunks manually.'
+      );
+    }
+    return { chunks, method: 'headings' };
+  }
+
+  const Anthropic = require('@anthropic-ai/sdk');
+  const anthropic = new Anthropic();
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5',
+    max_tokens: 8000,
+    system: IMPORT_SYSTEM,
+    output_config: { format: { type: 'json_schema', schema: IMPORT_SCHEMA } },
+    messages: [{ role: 'user', content: `RESUME:\n\n${text.slice(0, 40000)}` }],
+  });
+  if (response.stop_reason === 'refusal') {
+    throw new Error('The model declined to parse this file.');
+  }
+  const raw = response.content.find((b) => b.type === 'text')?.text ?? '{}';
+  const parsed = JSON.parse(raw);
+  const chunks = (parsed.chunks ?? []).filter(
+    (c) => c && KIND_ENUM.includes(c.kind) && c.title && c.content
+  );
+  if (!chunks.length) throw new Error('No profile entries found in that file.');
+  return { chunks, method: 'ai' };
+}
+
 const TAILOR_SYSTEM = `You write tailored resumes. You are given a candidate's
 profile (chunks of real experience, education, skills, projects) and one job
 listing. Produce a one-page resume in Markdown, tailored to that job:
@@ -418,6 +563,28 @@ if (!gotLock) {
       const { error } = await supabase
         .from('profile_chunks')
         .insert({ kind, title, content });
+      if (error) throw new Error(error.message);
+      return fetchProfile();
+    });
+    ipcMain.handle('import-resume', async () => {
+      const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+        title: 'Import resume',
+        properties: ['openFile'],
+        filters: [
+          { name: 'Resume', extensions: ['pdf', 'docx', 'txt', 'md'] },
+          { name: 'All files', extensions: ['*'] },
+        ],
+      });
+      if (canceled || !filePaths?.length) return null;
+      const result = await parseResume(filePaths[0]);
+      return { ...result, fileName: path.basename(filePaths[0]) };
+    });
+    ipcMain.handle('add-chunks', async (_e, chunks) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      if (!chunks?.length) return fetchProfile();
+      const { error } = await supabase.from('profile_chunks').insert(
+        chunks.map(({ kind, title, content }) => ({ kind, title, content }))
+      );
       if (error) throw new Error(error.message);
       return fetchProfile();
     });

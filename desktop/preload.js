@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('api', {
   setNotes: (id, notes) => ipcRenderer.invoke('set-notes', { id, notes }),
   getProfile: () => ipcRenderer.invoke('get-profile'),
   addChunk: (chunk) => ipcRenderer.invoke('add-chunk', chunk),
+  importResume: () => ipcRenderer.invoke('import-resume'),
+  addChunks: (chunks) => ipcRenderer.invoke('add-chunks', chunks),
   deleteChunk: (id) => ipcRenderer.invoke('delete-chunk', id),
   tailorResume: (id) => ipcRenderer.invoke('tailor-resume', id),
   saveText: (content, defaultName) =>

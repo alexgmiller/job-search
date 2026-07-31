@@ -48,7 +48,11 @@ Closing the window minimizes to the tray so notifications keep working.
   a tab keeps its listings in All).
 - **Location box** filters the visible list by substring, any view/tab.
 - **Profile** (header button): chunks of your experience/education/skills
-  stored in `profile_chunks`. The scraper **fit-scores** each new listing
+  stored in `profile_chunks`. **Import resume…** reads a PDF/DOCX/TXT/MD
+  and splits it into chunks for review — you edit/deselect before anything
+  is saved. With `ANTHROPIC_API_KEY` set it parses with Claude Haiku (one
+  call per import); without one it falls back to free section-heading
+  detection. The scraper **fit-scores** each new listing
   against your profile with free keyword matching — no API, badges are
   relative rather than absolute (hover for matched terms; New/Seen sort
   best-first). The **📄 Tailor** button generates a Markdown resume built

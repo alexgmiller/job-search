@@ -74,7 +74,7 @@
       background: #fff;
     }
     #chunk-form textarea { min-height: 72px; resize: vertical; }
-    #chunk-form .row { display: flex; justify-content: flex-end; }
+    #chunk-form .row { display: flex; justify-content: flex-end; gap: 6px; }
     #chunk-save {
       border: none;
       background: #2f8ad6;
@@ -84,6 +84,58 @@
       font-size: 12px;
       cursor: pointer;
     }
+    #import-btn {
+      border: 1px solid #d5d9df;
+      background: #fff;
+      color: #444;
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-right: auto;
+    }
+    #import-review {
+      display: none;
+      background: #fff;
+      border: 1px solid #cfe0f0;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    #import-status { font-size: 12px; color: #555; margin-bottom: 8px; }
+    #import-actions { display: none; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+    #import-actions button {
+      border: none;
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      background: #eee;
+      color: #444;
+    }
+    #import-save { background: #2f8ad6; color: #fff; }
+    .imp {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      padding: 8px 0;
+      border-top: 1px solid #eef1f4;
+    }
+    .imp:first-child { border-top: none; }
+    .imp input[type="checkbox"] { margin-top: 6px; }
+    .imp-fields { flex: 1; min-width: 0; }
+    .imp-row { display: flex; gap: 6px; margin-bottom: 4px; }
+    .imp-kind { width: 110px; flex-shrink: 0; }
+    .imp select, .imp input[type="text"], .imp textarea {
+      padding: 4px 6px;
+      border: 1px solid #d5d9df;
+      border-radius: 5px;
+      font-size: 11px;
+      font-family: inherit;
+      background: #fff;
+    }
+    .imp input[type="text"] { flex: 1; min-width: 0; }
+    .imp textarea { width: 100%; min-height: 46px; resize: vertical; }
     .fit-badge {
       font-size: 11px;
       font-weight: 700;
@@ -442,7 +494,18 @@
       </select>
       <input id="chunk-title" placeholder="Title (e.g. Help Desk Intern — Acme Corp, 2025)" />
       <textarea id="chunk-content" placeholder="Details — responsibilities, tech used, outcomes. The fit scorer and resume tailor only know what you write here."></textarea>
-      <div class="row"><button id="chunk-save">Add to profile</button></div>
+      <div class="row">
+        <button id="import-btn">Import resume…</button>
+        <button id="chunk-save">Add to profile</button>
+      </div>
+    </div>
+    <div id="import-review">
+      <div id="import-status"></div>
+      <div id="import-list"></div>
+      <div class="row" id="import-actions">
+        <button id="import-cancel">Cancel</button>
+        <button id="import-save">Add selected to profile</button>
+      </div>
     </div>
     <div id="chunk-list"></div>
   </div>
