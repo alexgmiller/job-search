@@ -91,6 +91,42 @@ const EARLY_CAREER_WEIGHTS = {
   executive: 0.15,
 };
 
+// The location matcher lives in a sibling module. Resolved lazily so this
+// file still loads in a plain <script> context where require() is absent.
+function resolveLocations() {
+  if (typeof window !== 'undefined' && window.JobLocations) return window.JobLocations;
+  if (typeof require === 'function') {
+    try {
+      return require('./locations');
+    } catch {
+      /* not available — location sub-score falls back to null */
+    }
+  }
+  return null;
+}
+
+// Graded location fit: a hit on a specific metro beats a statewide or
+// nationwide-remote hit, which beats no match at all. Returns null when
+// there's nothing to compare against.
+function locationScore(listing, targets) {
+  if (!targets?.length) return 100;
+  const L = resolveLocations();
+  if (!L) return null;
+  const TIER = {
+    sacramento: 100,
+    'bay-area': 100,
+    california: 90,
+    'us-remote': 80,
+    us: 65,
+  };
+  let best = 12;
+  for (const t of targets) {
+    if (!L.matchesLocation(listing.location, [t])) continue;
+    best = Math.max(best, TIER[t] ?? 95); // free-text targets are specific
+  }
+  return best;
+}
+
 function seniorityFactor(listing, weights) {
   const level = seniorityOf(listing.role ?? '');
   let factor = weights[level] ?? 1;
@@ -178,6 +214,8 @@ function buildScorer(profileChunks, corpus, options = {}) {
   const p99 = hits.length ? hits[Math.min(hits.length - 1, Math.floor(hits.length * 0.99))] : 0;
   const scale = p99 > 0 ? p99 : total;
 
+  const maxWeight = Math.max(...Object.values(weights));
+
   return function score(listing) {
     const jobTerms = terms(listingText(listing));
     const { hit, matched } = rawHit(jobTerms);
@@ -197,7 +235,21 @@ function buildScorer(profileChunks, corpus, options = {}) {
     } else if (factor > 1) {
       notes.push('boosted (early-career role)');
     }
-    return { score: value, reason: notes.join(' — ') };
+
+    // The composite alone doesn't say *why* a listing ranks where it does.
+    // These three are what the UI breaks the score into.
+    const parts = {
+      // Term overlap before the seniority multiplier is applied.
+      skills: Math.max(0, Math.min(100, Math.round((hit / scale) * 100))),
+      // Seniority suitability: the multiplier as a share of the best case.
+      seniority: Math.max(0, Math.min(100, Math.round((factor / maxWeight) * 100))),
+      location: locationScore(listing, options.locationTargets),
+      terms: top,
+      level,
+      years,
+    };
+
+    return { score: value, reason: notes.join(' — '), parts };
   };
 }
 
@@ -207,6 +259,7 @@ const API = {
   STOPWORDS,
   seniorityOf,
   yearsRequired,
+  locationScore,
   EARLY_CAREER_WEIGHTS,
 };
 if (typeof module !== 'undefined' && module.exports) module.exports = API;

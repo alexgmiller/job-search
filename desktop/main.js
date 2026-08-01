@@ -75,7 +75,7 @@ async function fetchListings() {
   // Newest 500 keeps the payload bounded once dismissed rows pile up.
   const { data, error } = await supabase
     .from('job_listings')
-    .select('id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason')
+    .select('id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason, fit_parts')
     .order('found_at', { ascending: false })
     .limit(500);
   if (error) throw new Error(error.message);
@@ -519,7 +519,7 @@ if (!gotLock) {
       const { data, error } = await supabase
         .from('job_listings')
         .select(
-          'id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason, description'
+          'id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason, fit_parts, description'
         )
         .eq('id', id)
         .single();

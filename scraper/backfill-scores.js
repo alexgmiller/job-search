@@ -88,7 +88,12 @@ async function main() {
   );
   if (!listings.length) return;
 
-  const scorer = buildScorer(chunks, corpus);
+  const { data: searchRows } = await supabase.from('searches').select('locations');
+  const locationTargets = [
+    ...new Set((searchRows ?? []).flatMap((s) => s.locations ?? [])),
+  ];
+
+  const scorer = buildScorer(chunks, corpus, { locationTargets });
   if (!scorer) throw new Error('Profile has no usable terms to score with.');
   const scored = listings.map((l) => ({ ...l, ...scorer(l) }));
 
@@ -118,11 +123,19 @@ async function main() {
   }
 
   let written = 0;
+  let partsUnsupported = false;
   for (const s of scored) {
-    const { error } = await supabase
-      .from('job_listings')
-      .update({ fit_score: s.score, fit_reason: s.reason })
-      .eq('id', s.id);
+    const patch = { fit_score: s.score, fit_reason: s.reason };
+    if (!partsUnsupported) patch.fit_parts = s.parts;
+    let { error } = await supabase.from('job_listings').update(patch).eq('id', s.id);
+    if (error && /fit_parts|PGRST204/i.test(error.message ?? '')) {
+      partsUnsupported = true;
+      console.warn('  fit_parts column missing — run migration-7; writing scores only.');
+      ({ error } = await supabase
+        .from('job_listings')
+        .update({ fit_score: s.score, fit_reason: s.reason })
+        .eq('id', s.id));
+    }
     if (error) console.warn(`  failed ${s.role}: ${error.message}`);
     else written++;
     if (written % 100 === 0) console.log(`  …${written}/${scored.length}`);

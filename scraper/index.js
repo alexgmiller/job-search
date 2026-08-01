@@ -378,21 +378,42 @@ async function scoreListings(inserted) {
   }
   console.log(`Scoring against ${corpus.length} stored listings.`);
 
-  const score = buildScorer(chunks, corpus);
+  // Region targets let the scorer grade location fit rather than just
+  // pass/fail it. Union of every enabled search's locations.
+  const { data: searchRows } = await supabase.from('searches').select('locations');
+  const locationTargets = [
+    ...new Set((searchRows ?? []).flatMap((s) => s.locations ?? [])),
+  ];
+
+  const score = buildScorer(chunks, corpus, { locationTargets });
   if (!score) {
     console.log('Profile has no usable terms — skipping fit scoring.');
     return;
   }
 
   let scored = 0;
+  let partsUnsupported = false;
   for (const l of inserted) {
-    const { score: value, reason } = score(l);
-    const { error: uErr } = await supabase
+    const { score: value, reason, parts } = score(l);
+    const patch = { fit_score: value, fit_reason: reason };
+    if (!partsUnsupported) patch.fit_parts = parts;
+    let { error: uErr } = await supabase
       .from('job_listings')
-      .update({ fit_score: value, fit_reason: reason })
+      .update(patch)
       .eq('id', l.id);
+    // Degrade gracefully when migration-7 hasn't been run.
+    if (uErr && /fit_parts|PGRST204/i.test(uErr.message ?? '')) {
+      partsUnsupported = true;
+      ({ error: uErr } = await supabase
+        .from('job_listings')
+        .update({ fit_score: value, fit_reason: reason })
+        .eq('id', l.id));
+    }
     if (uErr) console.warn(`scoring "${l.role}" failed: ${uErr.message}`);
     else scored++;
+  }
+  if (partsUnsupported) {
+    console.log('fit_parts column missing — run supabase/migration-7-fit-parts.sql.');
   }
   console.log(`${scored}/${inserted.length} new listings fit-scored.`);
 }

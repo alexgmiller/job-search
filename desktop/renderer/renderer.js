@@ -1,41 +1,139 @@
-const listEl = document.getElementById('list');
-const errorEl = document.getElementById('error');
-const refreshBtn = document.getElementById('refresh');
-const viewsEl = document.getElementById('views');
-const tabsEl = document.getElementById('tabs');
-const addFormEl = document.getElementById('add-form');
-const locFilterEl = document.getElementById('loc-filter');
-const addDeleteBtn = document.getElementById('add-delete');
-const addSaveBtn = document.getElementById('add-save');
+// Modernist widget renderer.
+//
+// One state machine, one render pass: `mode` selects a screen, each screen
+// builds header → content → footer into #app. Screens swap instantly; the
+// design deliberately has no transitions (a 340px always-on-top panel should
+// not feel like a phone).
 
-const STATUSES = ['applied', 'interviewing', 'offer', 'rejected'];
+const app = document.getElementById('app');
+
+// ---------- state ----------
 const VIEWS = [
   { key: 'new', label: 'New' },
-  { key: 'seen', label: 'Seen' },
-  { key: 'progress', label: 'In Progress' },
-  { key: 'dismissed', label: 'Dismissed' },
+  { key: 'seen', label: 'Kept' },
+  { key: 'progress', label: 'Progress' },
+  { key: 'dismissed', label: 'Out' },
 ];
+const VIEW_TITLE = {
+  new: 'By fit',
+  seen: 'Kept',
+  progress: 'In progress',
+  dismissed: 'Out',
+};
+const STATUSES = ['applied', 'interviewing', 'offer', 'rejected'];
+const STAGES = ['Applied', 'Interviewing', 'Offer', 'Rejected'];
+const KINDS = ['experience', 'education', 'skill', 'project', 'certification', 'other'];
 
-let searches = [];
-let all = []; // every listing (renderer splits into views)
-let activeView = 'new';
-let activeTab = 'all'; // 'all' | a search id
-let locationFilter = '';
-let editingSearchId = null;
-// Region keys currently toggled on in the filter row; empty = no region filter.
-const activeRegions = new Set();
+const state = {
+  mode: 'list', // list | triage | detail | tailor | profile | import | tabs
+  activeView: 'new',
+  activeTab: 'all',
+  openRowId: null,
+  triageIndex: 0,
+  detailListing: null,
+  listings: [],
+  searches: [],
+  profile: [],
+  locationFilter: '',
+  activeRegions: new Set(),
+  editingSearchId: null,
+  importResult: null, // { fileName, method, rows: [{kind,title,content,on}] }
+  tailor: null, // { listing, step, text, error }
+  error: '',
+  loaded: false,
+};
 
-function showError(msg) {
-  errorEl.textContent = msg;
-  errorEl.style.display = 'block';
+// ---------- icons (Lucide, inline) ----------
+const ICON_PATHS = {
+  eye: [['path', { d: 'M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0' }], ['circle', { cx: 12, cy: 12, r: 3 }]],
+  file: [['path', { d: 'M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z' }], ['path', { d: 'M14 2v4a2 2 0 0 0 2 2h4' }], ['path', { d: 'M16 13H8' }], ['path', { d: 'M16 17H8' }]],
+  note: [['path', { d: 'M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z' }], ['path', { d: 'M14 2v4a2 2 0 0 0 2 2h4' }], ['path', { d: 'M12 12H8' }]],
+  play: [['polygon', { points: '6 3 20 12 6 21 6 3', fill: 'currentColor' }]],
+  undo: [['path', { d: 'M9 14 4 9l5-5' }], ['path', { d: 'M4 9h10.5a5.5 5.5 0 0 1 0 11H11' }]],
+  pencil: [['path', { d: 'M12 20h9' }], ['path', { d: 'M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z' }]],
+  check: [['path', { d: 'M20 6 9 17l-5-5' }]],
+  x: [['path', { d: 'M18 6 6 18' }], ['path', { d: 'm6 6 12 12' }]],
+  ext: [['path', { d: 'M7 7h10v10' }], ['path', { d: 'M7 17 17 7' }]],
+  left: [['path', { d: 'm12 19-7-7 7-7' }], ['path', { d: 'M19 12H5' }]],
+  plus: [['path', { d: 'M5 12h14' }], ['path', { d: 'M12 5v14' }]],
+  trash: [['path', { d: 'M3 6h18' }], ['path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6' }], ['path', { d: 'M10 11v6' }], ['path', { d: 'M14 11v6' }]],
+};
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function icon(name, size = 11) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('width', size);
+  svg.setAttribute('height', size);
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2.4');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.style.flexShrink = '0';
+  for (const [tag, attrs] of ICON_PATHS[name] ?? []) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    svg.appendChild(el);
+  }
+  return svg;
 }
 
-function clearError() {
-  errorEl.style.display = 'none';
+// ---------- tiny DOM helpers ----------
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
 }
 
-// ---------- view membership ----------
+function btn(label, className, { iconName, onClick, title, disabled } = {}) {
+  const b = el('button', className);
+  if (iconName) b.append(icon(iconName));
+  if (label) b.append(el('span', null, label));
+  if (title) b.title = title;
+  if (disabled) b.disabled = true;
+  if (onClick) {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onClick(e);
+    });
+  }
+  return b;
+}
 
+function iconBtn(name, { onClick, title } = {}) {
+  const b = el('button', 'btn-ico');
+  b.append(icon(name));
+  if (title) b.title = title;
+  if (onClick) {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onClick(e);
+    });
+  }
+  return b;
+}
+
+function backLink(label, onClick) {
+  const b = el('button', 'back');
+  b.append(icon('left'), el('span', null, label));
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }) : '');
+
+function sourceOf(url = '') {
+  if (/usajobs/.test(url)) return 'USAJobs';
+  if (/adzuna/.test(url)) return 'Adzuna';
+  if (/remotive/.test(url)) return 'Remotive';
+  if (/lever\.co/.test(url)) return 'Lever';
+  if (/greenhouse/.test(url)) return 'Greenhouse';
+  return 'Board';
+}
+
+// ---------- derived data ----------
 function viewOf(l) {
   if (l.status) return 'progress';
   if (l.dismissed_at) return 'dismissed';
@@ -44,1157 +142,950 @@ function viewOf(l) {
 }
 
 function inView(view) {
-  const listings = all.filter((l) => viewOf(l) === view);
+  let rows = state.listings.filter((l) => viewOf(l) === view);
+  if (state.activeTab !== 'all') rows = rows.filter((l) => l.search_id === state.activeTab);
+  if (state.activeRegions.size) {
+    const targets = [...state.activeRegions];
+    rows = rows.filter((l) => window.JobLocations.matchesLocation(l.location, targets));
+  }
+  if (state.locationFilter) {
+    const f = state.locationFilter.toLowerCase();
+    rows = rows.filter((l) => (l.location ?? '').toLowerCase().includes(f));
+  }
   if (view === 'progress') {
-    return listings.sort((a, b) =>
-      (b.applied_at ?? '').localeCompare(a.applied_at ?? '')
-    );
+    return rows.sort((a, b) => (b.applied_at ?? '').localeCompare(a.applied_at ?? ''));
   }
-  if (view === 'new' || view === 'seen') {
-    // Best fit first; unscored listings fall back to date order at the end.
-    return listings.sort((a, b) => {
-      const af = a.fit_score ?? -1;
-      const bf = b.fit_score ?? -1;
-      if (af !== bf) return bf - af;
-      return (b.found_at ?? '').localeCompare(a.found_at ?? '');
-    });
-  }
-  return listings;
+  return rows.sort((a, b) => (b.fit_score ?? -1) - (a.fit_score ?? -1));
 }
 
-// ---------- views + tabs ----------
-
-function renderViews() {
-  viewsEl.replaceChildren();
-  for (const v of VIEWS) {
-    const btn = document.createElement('button');
-    btn.className = 'view' + (activeView === v.key ? ' active' : '');
-    btn.textContent = `${v.label} (${inView(v.key).length})`;
-    btn.addEventListener('click', () => {
-      activeView = v.key;
-      closeForm();
-      rerender();
-    });
-    viewsEl.appendChild(btn);
-  }
+// Counts ignore the tab/region filters so the strip reads as a global tally.
+function viewCount(view) {
+  return state.listings.filter((l) => viewOf(l) === view).length;
 }
 
-// Region chips inside the tab editor; selections become `searches.locations`
-// entries, which the scraper turns into API location queries.
-const REGION_KEYS = Object.keys(window.JobLocations.REGION_LABELS);
-const formRegions = new Set();
-const addRegionChipsEl = document.getElementById('add-region-chips');
-const regionChipEls = {};
-for (const [key, label] of Object.entries(window.JobLocations.REGION_LABELS)) {
-  const chip = document.createElement('button');
-  chip.className = 'region-chip';
-  chip.textContent = label;
-  chip.addEventListener('click', (e) => {
-    e.preventDefault();
-    if (formRegions.has(key)) formRegions.delete(key);
-    else formRegions.add(key);
-    chip.classList.toggle('on', formRegions.has(key));
+const scoreClass = (n) => (n >= 75 ? 'hi' : n >= 50 ? '' : 'lo');
+
+// The score breakdown; falls back to the composite when fit_parts is absent
+// (listings scored before migration-7).
+function partsOf(l) {
+  const p = l.fit_parts;
+  if (p && typeof p === 'object') return p;
+  const composite = l.fit_score ?? 0;
+  return { skills: composite, seniority: null, location: null, terms: [] };
+}
+
+// Group a view's rows into the labelled bands the design calls for.
+function bandsFor(view, rows) {
+  if (view === 'new') {
+    return [
+      { label: 'Strong · 75+', strong: true, rows: rows.filter((r) => (r.fit_score ?? 0) >= 75) },
+      { label: 'Worth a look · 50–74', rows: rows.filter((r) => (r.fit_score ?? 0) >= 50 && (r.fit_score ?? 0) < 75) },
+      { label: 'Long shot · under 50', rows: rows.filter((r) => (r.fit_score ?? 0) < 50) },
+    ].filter((b) => b.rows.length);
+  }
+  if (view === 'seen') return [{ label: 'Kept for later', rows }];
+  if (view === 'dismissed') return [{ label: 'Dismissed', rows }];
+  // In progress: bands are pipeline stages, furthest stage styled strong.
+  const order = ['offer', 'interviewing', 'applied', 'rejected'];
+  const present = order.filter((s) => rows.some((r) => r.status === s));
+  return present.map((s, i) => ({
+    label: s,
+    strong: i === 0,
+    rows: rows.filter((r) => r.status === s),
+  }));
+}
+
+// ---------- mutations ----------
+// Optimistic: patch locally, render, then persist. On failure surface the
+// message; the next poll re-syncs from the server.
+function mutate(listing, patch, call, failMsg) {
+  Object.assign(listing, patch);
+  const stored = state.listings.find((x) => x.id === listing.id);
+  if (stored && stored !== listing) Object.assign(stored, patch);
+  render();
+  call().catch(() => {
+    state.error = failMsg;
+    render();
   });
-  regionChipEls[key] = chip;
-  addRegionChipsEl.appendChild(chip);
 }
 
-function setFormRegions(locations = []) {
-  formRegions.clear();
-  for (const l of locations) if (REGION_KEYS.includes(l)) formRegions.add(l);
-  for (const [key, chip] of Object.entries(regionChipEls)) {
-    chip.classList.toggle('on', formRegions.has(key));
-  }
+const actKeep = (l) => mutate(l, { seen: true }, () => window.api.markSeen(l.id), 'Could not keep.');
+const actApply = (l) =>
+  mutate(
+    l,
+    { status: 'applied', applied_at: new Date().toISOString(), seen: true, dismissed_at: null },
+    () => window.api.markApplied(l.id),
+    'Could not mark applied.'
+  );
+const actDismiss = (l) =>
+  mutate(l, { seen: true, dismissed_at: new Date().toISOString() }, () => window.api.dismiss(l.id), 'Could not dismiss.');
+const actRestore = (l) =>
+  mutate(l, { seen: true, dismissed_at: null }, () => window.api.restore(l.id), 'Could not restore.');
+
+function go(mode, patch = {}) {
+  Object.assign(state, patch, { mode });
+  render();
 }
 
-function openForm(search) {
-  editingSearchId = search ? search.id : null;
-  document.getElementById('add-label').value = search?.label ?? '';
-  document.getElementById('add-keywords').value = (search?.keywords ?? []).join(', ');
-  setFormRegions(search?.locations ?? []);
-  // Free-text locations are anything that isn't a known region key.
-  document.getElementById('add-locations').value = (search?.locations ?? [])
-    .filter((l) => !REGION_KEYS.includes(l))
-    .join(', ');
-  addDeleteBtn.style.display = search ? 'inline-block' : 'none';
-  addSaveBtn.textContent = search ? 'Save changes' : 'Add role';
-  addFormEl.style.display = 'block';
-}
-
-function closeForm() {
-  addFormEl.style.display = 'none';
-  editingSearchId = null;
-}
-
-function renderTabs() {
-  tabsEl.replaceChildren();
-  const viewListings = inView(activeView);
-
-  const makeTab = (id, label, opts = {}) => {
-    const btn = document.createElement('button');
-    btn.className = 'tab' + (activeTab === id ? ' active' : '');
-    btn.textContent = label;
-    if (opts.editable && activeTab === id) {
-      const pencil = document.createElement('span');
-      pencil.className = 'tab-edit';
-      pencil.textContent = '✎';
-      pencil.title = 'Edit this tab';
-      pencil.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openForm(searches.find((s) => s.id === id));
-      });
-      btn.appendChild(pencil);
-    }
-    btn.addEventListener('click', () => {
-      activeTab = id;
-      closeForm();
-      rerender();
-    });
-    tabsEl.appendChild(btn);
-  };
-
-  makeTab('all', `All (${viewListings.length})`);
-  for (const s of searches) {
-    const count = viewListings.filter((l) => l.search_id === s.id).length;
-    makeTab(s.id, `${s.label} (${count})`, { editable: true });
-  }
-
-  const plus = document.createElement('button');
-  plus.className = 'tab';
-  plus.textContent = '+';
-  plus.title = 'Add a role tab';
-  plus.addEventListener('click', () => {
-    if (addFormEl.style.display === 'block' && editingSearchId === null) {
-      closeForm();
-    } else {
-      openForm(null);
-    }
-  });
-  tabsEl.appendChild(plus);
-}
-
-// ---------- cards ----------
-
-function visibleListings() {
-  let listings = inView(activeView);
-  if (activeTab !== 'all') {
-    listings = listings.filter((l) => l.search_id === activeTab);
-  }
-  // Region chips use the shared parser (handles multi-location strings and
-  // remote-but-wrong-country); the text box is a plain substring on top.
-  if (activeRegions.size) {
-    const targets = [...activeRegions];
-    listings = listings.filter((l) =>
-      window.JobLocations.matchesLocation(l.location, targets)
-    );
-  }
-  if (locationFilter) {
-    const f = locationFilter.toLowerCase();
-    listings = listings.filter((l) => (l.location ?? '').toLowerCase().includes(f));
-  }
-  return listings;
-}
-
-// Update a listing locally + remotely; on failure, re-show the truth.
-function mutate(l, localPatch, remoteCall, failMsg) {
-  Object.assign(l, localPatch);
-  rerender();
-  remoteCall().catch(() => showError(failMsg));
-}
-
-function makeCardBody(l) {
-  const body = document.createElement('div');
-  body.className = 'card-body';
-
-  const role = document.createElement('div');
-  role.className = 'role';
-  role.textContent = l.role;
-
-  const company = document.createElement('div');
-  company.className = 'company';
-  company.textContent = l.company;
-
-  const meta = document.createElement('div');
-  meta.className = 'meta';
-  const date = activeView === 'progress' ? l.applied_at : l.found_at;
-  meta.textContent = [l.location, date ? new Date(date).toLocaleDateString() : null]
-    .filter(Boolean)
-    .join(' · ');
-
-  body.append(role, company, meta);
-  return body;
-}
-
-function fitBadge(l) {
-  if (l.fit_score == null) return null;
-  const badge = document.createElement('span');
-  badge.className =
-    'fit-badge ' +
-    (l.fit_score >= 75 ? 'fit-high' : l.fit_score >= 50 ? 'fit-mid' : 'fit-low');
-  badge.textContent = l.fit_score;
-  badge.title = l.fit_reason ?? '';
-  return badge;
-}
-
-function tailorButton(l) {
-  const btn = document.createElement('button');
-  btn.className = 'tailor-btn';
-  btn.textContent = '📄 Tailor';
-  btn.title = 'Generate a resume tailored to this listing from your profile';
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    openTailorModal(l);
-  });
-  return btn;
-}
-
-function seenButton(l) {
-  const btn = document.createElement('button');
-  btn.className = 'seen-btn';
-  btn.textContent = '👁 Seen';
-  btn.title = 'Reviewed — keep in the Seen list to maybe apply later';
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    mutate(l, { seen: true }, () => window.api.markSeen(l.id),
-      'Could not mark as seen — refresh and retry.');
-  });
-  return btn;
-}
-
-function applyButton(l) {
-  const btn = document.createElement('button');
-  btn.className = 'apply-btn';
-  btn.textContent = 'Applied ✓';
-  btn.title = 'Mark as applied (moves to In Progress)';
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    mutate(
-      l,
-      { status: 'applied', applied_at: new Date().toISOString(), seen: true, dismissed_at: null },
-      () => window.api.markApplied(l.id),
-      'Could not mark as applied — refresh and retry.'
-    );
-  });
-  return btn;
-}
-
-function dismissButton(l) {
-  const btn = document.createElement('button');
-  btn.className = 'dismiss';
-  btn.textContent = '✕';
-  btn.title = 'Dismiss — not interested (recoverable in Dismissed)';
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    mutate(
-      l,
-      { seen: true, dismissed_at: new Date().toISOString() },
-      () => window.api.dismiss(l.id),
-      'Could not dismiss — refresh and retry.'
-    );
-  });
-  return btn;
-}
-
-function restoreButton(l) {
-  const btn = document.createElement('button');
-  btn.className = 'restore-btn';
-  btn.textContent = '↩ Restore';
-  btn.title = 'Move back to the Seen list';
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    mutate(l, { seen: true, dismissed_at: null }, () => window.api.restore(l.id),
-      'Could not restore — refresh and retry.');
-  });
-  return btn;
-}
-
-function makeCard(l) {
-  const wrap = document.createElement('div');
-  wrap.className = 'card-wrap';
-
-  const card = document.createElement('div');
-  card.className = 'card';
-  // Title/company/meta and the fit badge share the top row; actions sit on
-  // their own row underneath so long role titles get the full card width.
-  const main = document.createElement('div');
-  main.className = 'card-main';
-  main.append(makeCardBody(l));
-  const badge = fitBadge(l);
-  if (badge) main.append(badge);
-  card.append(main);
-
-  const actions = document.createElement('div');
-  actions.className = 'card-actions';
-  card.append(actions);
-
-  // Clicking a card opens the in-app detail view; the posting itself is one
-  // click further in. This is what makes widget mode usable — previously the
-  // only possible action was launching a browser.
-  card.addEventListener('click', () => openDetail(l));
-
-  if (activeView === 'new') {
-    actions.append(tailorButton(l), seenButton(l), applyButton(l), dismissButton(l));
-  } else if (activeView === 'seen') {
-    actions.append(tailorButton(l), applyButton(l), dismissButton(l));
-  } else if (activeView === 'dismissed') {
-    actions.append(restoreButton(l));
-  } else {
-    // In Progress: status pipeline + notes
-    const status = document.createElement('select');
-    status.className = 'status-select';
-    for (const s of STATUSES) {
-      const opt = document.createElement('option');
-      opt.value = s;
-      opt.textContent = s[0].toUpperCase() + s.slice(1);
-      if (l.status === s) opt.selected = true;
-      status.appendChild(opt);
-    }
-    status.addEventListener('click', (e) => e.stopPropagation());
-    status.addEventListener('change', () => {
-      l.status = status.value;
-      window.api.setStatus(l.id, status.value).catch(() =>
-        showError('Could not update status — refresh and retry.')
-      );
-      renderViews();
-    });
-
-    const notesBtn = document.createElement('button');
-    notesBtn.className = 'notes-btn';
-    notesBtn.textContent = l.notes ? 'Notes •' : 'Notes';
-
-    let notesArea = null;
-    notesBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (notesArea) {
-        notesArea.remove();
-        notesArea = null;
-        return;
-      }
-      notesArea = document.createElement('textarea');
-      notesArea.className = 'notes-area';
-      notesArea.placeholder = 'Notes — comp info, contacts, why you’re interested…';
-      notesArea.value = l.notes ?? '';
-      notesArea.addEventListener('blur', () => {
-        const text = notesArea.value.trim();
-        if (text === (l.notes ?? '')) return;
-        l.notes = text || null;
-        notesBtn.textContent = l.notes ? 'Notes •' : 'Notes';
-        window.api.setNotes(l.id, text).catch(() =>
-          showError('Could not save notes — they may be lost on refresh.')
-        );
-      });
-      wrap.append(notesArea);
-      notesArea.focus();
-    });
-
-    actions.append(status, notesBtn, tailorButton(l));
-  }
-
-  wrap.append(card);
-  return wrap;
-}
-
-// ---------- detail view ----------
-// Rendered in place of the list, so it works identically in the compact
-// widget and the full window.
-
-let detailListing = null;
-
-function openDetail(listing) {
-  detailListing = listing;
-  rerender();
-  // Description isn't in the poll payload; fill it in when it arrives.
+function openDetail(l) {
+  state.detailListing = l;
+  state.mode = 'detail';
+  render();
   window.api
-    .getListing(listing.id)
+    .getListing(l.id)
     .then((full) => {
-      if (full && detailListing && detailListing.id === full.id) {
-        detailListing = { ...detailListing, ...full };
-        renderList();
+      if (full && state.detailListing?.id === full.id) {
+        state.detailListing = { ...state.detailListing, ...full };
+        if (state.mode === 'detail') render();
       }
     })
     .catch(() => {});
 }
 
-function closeDetail() {
-  detailListing = null;
-  rerender();
+// ---------- shared pieces ----------
+function scoreBars(l, { thick } = {}) {
+  const p = partsOf(l);
+  const tone = (l.fit_score ?? 0) >= 75 ? 'var(--acc)' : 'var(--ink)';
+  const wrap = el('div', thick ? 'bars d-bars' : 'bars');
+  const rows = [
+    ['Skills', p.skills],
+    ['Seniority', p.seniority],
+    ['Location', p.location],
+  ];
+  for (const [label, value] of rows) {
+    if (value == null) continue;
+    const row = el('div', 'bar-row');
+    row.append(el('span', 'bar-label', label));
+    const bar = el('div', 'bar');
+    bar.style.background = `linear-gradient(to right, ${tone} ${value}%, var(--rule) ${value}%)`;
+    row.append(bar, el('span', 'bar-val', String(value)));
+    wrap.append(row);
+  }
+  return wrap.children.length ? wrap : null;
 }
 
-function detailAction(label, className, title, fn) {
-  const btn = document.createElement('button');
-  btn.className = className;
-  btn.textContent = label;
-  if (title) btn.title = title;
-  btn.addEventListener('click', fn);
-  return btn;
+function termTags(l) {
+  const terms = partsOf(l).terms ?? [];
+  if (!terms.length) return null;
+  const wrap = el('div', 'tags');
+  for (const t of terms.slice(0, 6)) wrap.append(el('span', 'tag', t));
+  return wrap;
 }
 
-function renderDetail(l) {
-  listEl.replaceChildren();
+function errorBar() {
+  if (!state.error) return null;
+  const bar = el('div', 'err', state.error);
+  bar.addEventListener('click', () => {
+    state.error = '';
+    render();
+  });
+  return bar;
+}
 
-  const wrap = document.createElement('div');
-  wrap.className = 'detail';
+// ---------- screen: list ----------
+function screenList() {
+  const screen = el('div', 'screen');
+  const view = state.activeView;
+  const rows = inView(view);
 
-  const back = document.createElement('button');
-  back.className = 'detail-back';
-  back.textContent = '← Back';
-  back.addEventListener('click', closeDetail);
-  wrap.append(back);
+  // Header
+  const hdr = el('div', 'hdr');
+  const title = el('div', 'hdr-title');
+  title.append(el('span', null, VIEW_TITLE[view]));
+  title.append(el('span', 'hdr-count', String(rows.length)));
+  const actions = el('div', 'hdr-actions');
+  actions.append(
+    btn('Profile', 'btn', {
+      onClick: () => {
+        window.api.getProfile().then((p) => go('profile', { profile: p }));
+      },
+    }),
+    btn('Refresh', 'btn btn-acc', {
+      onClick: async (e) => {
+        const b = e.currentTarget;
+        b.disabled = true;
+        state.searches = await window.api.getSearches();
+        await window.api.refresh();
+        b.disabled = false;
+      },
+    })
+  );
+  const winBtns = el('div', 'hdr-actions');
+  winBtns.id = 'win-btns';
+  winBtns.append(
+    btn('', 'btn', { iconName: 'ext', title: 'Full window', onClick: () => window.api.setMode('full') }),
+    btn('', 'btn', { iconName: 'x', title: 'Hide to tray', onClick: () => window.api.minimize() })
+  );
+  const right = el('div', 'hdr-actions');
+  right.append(actions, winBtns);
+  hdr.append(title, right);
+  screen.append(hdr);
 
-  const role = document.createElement('div');
-  role.className = 'detail-role';
-  role.textContent = l.role;
-
-  const company = document.createElement('div');
-  company.className = 'detail-company';
-  company.textContent = l.company;
-
-  const meta = document.createElement('div');
-  meta.className = 'detail-meta';
-  const tab = searches.find((s) => s.id === l.search_id)?.label;
-  meta.textContent = [
-    l.location,
-    l.found_at ? `found ${new Date(l.found_at).toLocaleDateString()}` : null,
-    l.applied_at ? `applied ${new Date(l.applied_at).toLocaleDateString()}` : null,
-    tab,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-
-  wrap.append(role, company, meta);
-
-  if (l.fit_score != null) {
-    const fit = document.createElement('div');
-    fit.className = 'detail-fit';
-    const badge = fitBadge(l);
-    if (badge) fit.append(badge);
-    const why = document.createElement('span');
-    why.className = 'detail-fit-why';
-    why.textContent = l.fit_reason ?? '';
-    fit.append(why);
-    wrap.append(fit);
+  // View strip
+  const strip = el('div', 'strip');
+  for (const v of VIEWS) {
+    const cell = el('button', 'strip-cell' + (v.key === view ? ' on' : ''), `${v.label} ${viewCount(v.key)}`);
+    cell.addEventListener('click', () => {
+      state.activeView = v.key;
+      state.openRowId = null;
+      render();
+    });
+    strip.append(cell);
   }
+  screen.append(strip);
 
-  // Actions available depend on which view the listing lives in.
-  const actions = document.createElement('div');
-  actions.className = 'detail-actions';
-
-  if (l.url) {
-    actions.append(
-      detailAction('Open posting ↗', 'detail-open', 'Open in your browser', () =>
-        window.api.openUrl(l.url)
-      )
-    );
-  }
-
-  const view = viewOf(l);
-  const after = (patch, call, failMsg) => async () => {
-    Object.assign(l, patch);
-    const target = all.find((x) => x.id === l.id);
-    if (target) Object.assign(target, patch);
-    try {
-      await call();
-      closeDetail();
-    } catch {
-      showError(failMsg);
-    }
+  // Role tabs
+  const tabs = el('div', 'tabs');
+  const mkTab = (id, label) => {
+    const t = el('button', 'tab' + (state.activeTab === id ? ' on' : ''), label);
+    t.addEventListener('click', () => {
+      state.activeTab = id;
+      state.openRowId = null;
+      render();
+    });
+    return t;
   };
-
-  if (view === 'new') {
-    actions.append(
-      detailAction('👁 Seen', 'seen-btn', 'Reviewed — keep for later',
-        after({ seen: true }, () => window.api.markSeen(l.id), 'Could not mark as seen.'))
-    );
+  tabs.append(mkTab('all', `All · ${rows.length}`));
+  for (const s of state.searches) {
+    const n = state.listings.filter((l) => viewOf(l) === view && l.search_id === s.id).length;
+    tabs.append(mkTab(s.id, `${s.label} · ${n}`));
   }
-  if (view === 'new' || view === 'seen') {
-    actions.append(
-      detailAction('Applied ✓', 'apply-btn', 'Move to In Progress',
-        after(
-          { status: 'applied', applied_at: new Date().toISOString(), seen: true, dismissed_at: null },
-          () => window.api.markApplied(l.id),
-          'Could not mark as applied.'
-        )),
-      detailAction('✕ Dismiss', 'restore-btn', 'Not interested',
-        after({ seen: true, dismissed_at: new Date().toISOString() },
-          () => window.api.dismiss(l.id), 'Could not dismiss.'))
-    );
-  }
-  if (view === 'dismissed') {
-    actions.append(
-      detailAction('↩ Restore', 'restore-btn', 'Move back to Seen',
-        after({ seen: true, dismissed_at: null }, () => window.api.restore(l.id),
-          'Could not restore.'))
-    );
-  }
+  const add = el('button', 'tab-add');
+  add.append(icon('plus'));
+  add.title = 'New tab';
+  add.addEventListener('click', () => go('tabs', { editingSearchId: null }));
+  tabs.append(add);
+  screen.append(tabs);
 
-  const tailorBtn = detailAction('📄 Tailor resume', 'tailor-btn',
-    'Generate a resume tailored to this listing', () => runTailor(l, wrap, tailorBtn));
-  actions.append(tailorBtn);
-  wrap.append(actions);
+  const err = errorBar();
+  if (err) screen.append(err);
 
-  // In Progress listings get their status pipeline and notes inline.
-  if (view === 'progress') {
-    const statusRow = document.createElement('div');
-    statusRow.className = 'detail-actions';
-    const status = document.createElement('select');
-    status.className = 'status-select';
-    for (const s of STATUSES) {
-      const opt = document.createElement('option');
-      opt.value = s;
-      opt.textContent = s[0].toUpperCase() + s.slice(1);
-      if (l.status === s) opt.selected = true;
-      status.appendChild(opt);
+  // Body
+  const body = el('div', 'scroll');
+  if (!rows.length) {
+    body.append(el('div', 'empty', emptyText(view)));
+  } else {
+    for (const band of bandsFor(view, rows)) {
+      const head = el('div', 'band' + (band.strong ? ' strong' : ''));
+      head.append(el('span', null, band.label), el('span', null, String(band.rows.length)));
+      body.append(head);
+      for (const l of band.rows) body.append(listRow(l, view));
     }
-    status.addEventListener('change', () => {
-      l.status = status.value;
-      const target = all.find((x) => x.id === l.id);
-      if (target) target.status = status.value;
-      window.api.setStatus(l.id, status.value).catch(() =>
-        showError('Could not update status.')
-      );
-    });
-    statusRow.append(status);
-    wrap.append(statusRow);
-
-    const notes = document.createElement('textarea');
-    notes.className = 'notes-area';
-    notes.placeholder = 'Notes — comp info, contacts, why you’re interested…';
-    notes.value = l.notes ?? '';
-    notes.addEventListener('blur', () => {
-      const text = notes.value.trim();
-      if (text === (l.notes ?? '')) return;
-      l.notes = text || null;
-      window.api.setNotes(l.id, text).catch(() => showError('Could not save notes.'));
-    });
-    wrap.append(notes);
   }
+  screen.append(body);
 
-  const desc = document.createElement('div');
-  desc.className = 'detail-desc';
-  desc.textContent = l.description ?? 'Loading description…';
-  if (!l.description && l.description !== undefined) {
-    desc.textContent = 'No description was captured for this listing.';
-  }
-  wrap.append(desc);
-
-  listEl.append(wrap);
+  // Footer
+  const foot = el('div', 'foot');
+  const queue = inView('new');
+  foot.append(
+    btn(`Triage queue · ${queue.length}`, 'btn btn-lg' + (view === 'new' ? ' btn-acc' : ''), {
+      iconName: 'play',
+      disabled: !queue.length,
+      onClick: () => go('triage', { triageIndex: 0 }),
+    }),
+    btn('Filters', 'btn', { onClick: () => go('tabs', { editingSearchId: 'filters' }) })
+  );
+  screen.append(foot);
+  return screen;
 }
 
-// Tailored resume renders inline in the detail view so it works at widget width.
-async function runTailor(l, wrap, btn) {
-  let out = wrap.querySelector('.detail-tailor');
-  if (!out) {
-    out = document.createElement('div');
-    out.className = 'detail-tailor';
-    wrap.append(out);
+function emptyText(view) {
+  return {
+    new: 'No new listings. The scraper runs every 3 hours.',
+    seen: 'Nothing kept — use Keep on a new listing to park it here.',
+    progress: 'Nothing applied to yet.',
+    dismissed: 'Nothing dismissed.',
+  }[view];
+}
+
+function listRow(l, view) {
+  const wrap = el('div');
+  const open = state.openRowId === l.id;
+  const row = el('div', 'row' + (open ? ' open' : ''));
+
+  const score = el('div', `row-score ${scoreClass(l.fit_score ?? 0)}`, l.fit_score == null ? '–' : String(l.fit_score));
+  const text = el('div', 'row-text');
+  text.append(el('div', 'row-role', l.role), el('div', 'row-sub', [l.company, l.location].filter(Boolean).join(' · ')));
+
+  const acts = el('div', 'row-acts');
+  if (view === 'dismissed') {
+    acts.append(iconBtn('undo', { title: 'Restore', onClick: () => actRestore(l) }));
+  } else if (view === 'progress') {
+    acts.append(iconBtn('pencil', { title: 'Open', onClick: () => openDetail(l) }));
+  } else {
+    acts.append(
+      iconBtn('check', { title: 'Applied', onClick: () => actApply(l) }),
+      iconBtn('x', { title: 'Dismiss', onClick: () => actDismiss(l) })
+    );
   }
-  out.replaceChildren();
-  const status = document.createElement('div');
-  status.className = 'detail-tailor-status';
-  status.textContent = 'Generating tailored resume… this can take a minute.';
-  out.append(status);
-  btn.disabled = true;
 
-  try {
-    const text = await window.api.tailorResume(l.id);
-    status.remove();
+  row.append(score, text, acts);
+  row.addEventListener('click', () => {
+    state.openRowId = open ? null : l.id;
+    render();
+  });
+  wrap.append(row);
 
-    const body = document.createElement('pre');
-    body.className = 'detail-tailor-body';
-    body.textContent = text;
+  if (open) wrap.append(expandedRow(l, view));
+  return wrap;
+}
 
-    const row = document.createElement('div');
-    row.className = 'detail-actions';
-    row.append(
-      detailAction('Copy', 'detail-open', '', async () => {
-        await navigator.clipboard.writeText(text);
-      }),
-      detailAction('Save…', 'detail-open', '', async () => {
+function expandedRow(l, view) {
+  const exp = el('div', 'exp');
+
+  if (view === 'progress') {
+    const pipe = el('div', 'pipe');
+    for (const stage of STAGES) {
+      const on = (l.status ?? '').toLowerCase() === stage.toLowerCase();
+      const cell = el('button', 'pipe-cell' + (on ? ' on' : ''), stage);
+      cell.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const next = stage.toLowerCase();
+        l.status = next;
+        const stored = state.listings.find((x) => x.id === l.id);
+        if (stored) stored.status = next;
+        window.api.setStatus(l.id, next).catch(() => {
+          state.error = 'Could not update status.';
+          render();
+        });
+        render();
+      });
+      pipe.append(cell);
+    }
+    exp.append(pipe);
+    if (l.notes) exp.append(el('div', 'terms', l.notes));
+    const acts = el('div', 'exp-acts');
+    acts.append(
+      btn('Details', 'btn btn-sm', { onClick: () => openDetail(l) }),
+      btn('Tailor', 'btn btn-sm', { iconName: 'file', onClick: () => startTailor(l) })
+    );
+    exp.append(acts);
+    return exp;
+  }
+
+  const bars = scoreBars(l);
+  if (bars) exp.append(bars);
+  const terms = partsOf(l).terms ?? [];
+  if (terms.length) exp.append(el('div', 'terms', terms.join(' · ')));
+
+  const acts = el('div', 'exp-acts');
+  acts.append(btn('Details', 'btn btn-sm', { onClick: () => openDetail(l) }));
+  if (view === 'new') acts.append(btn('Keep', 'btn btn-sm', { iconName: 'eye', onClick: () => actKeep(l) }));
+  if (view === 'dismissed') {
+    acts.append(btn('Restore', 'btn btn-sm', { iconName: 'undo', onClick: () => actRestore(l) }));
+  } else {
+    acts.append(btn('Applied', 'btn btn-sm btn-acc', { iconName: 'check', onClick: () => actApply(l) }));
+  }
+  exp.append(acts);
+  return exp;
+}
+
+// ---------- screen: listing detail ----------
+function screenDetail() {
+  const l = state.detailListing;
+  const screen = el('div', 'screen');
+
+  const hdr = el('div', 'hdr');
+  hdr.append(
+    backLink(VIEW_TITLE[state.activeView], () => go('list')),
+    el('div', 'hdr-right', sourceOf(l.url))
+  );
+  screen.append(hdr);
+
+  const body = el('div', 'scroll pad');
+  const head = el('div', 'd-head');
+  const left = el('div');
+  left.append(el('div', 'd-role', l.role), el('div', 'd-company', l.company));
+  const tab = state.searches.find((s) => s.id === l.search_id)?.label;
+  left.append(
+    el('div', 'd-meta', [l.location, l.found_at ? `found ${fmtDate(l.found_at)}` : null, tab].filter(Boolean).join(' · '))
+  );
+  const right = el('div');
+  right.append(
+    el('div', `d-score ${scoreClass(l.fit_score ?? 0)}`, l.fit_score == null ? '–' : String(l.fit_score)),
+    el('div', 'd-fit', 'Fit')
+  );
+  head.append(left, right);
+  body.append(head);
+
+  const bars = scoreBars(l, { thick: true });
+  if (bars) body.append(bars);
+  const tags = termTags(l);
+  if (tags) body.append(tags);
+
+  body.append(el('div', 'desc', l.description ?? 'Loading description…'));
+  screen.append(body);
+
+  const foot = el('div', 'foot foot-grid');
+  const top = el('div', 'grid2');
+  top.append(
+    btn('Open posting', 'btn btn-lg btn-acc', {
+      iconName: 'ext',
+      disabled: !l.url,
+      onClick: () => l.url && window.api.openUrl(l.url),
+    }),
+    btn('Tailor resume', 'btn btn-lg', { iconName: 'file', onClick: () => startTailor(l) })
+  );
+  const bottom = el('div', 'grid3');
+  const view = viewOf(l);
+  bottom.append(
+    btn('Keep', 'btn btn-lg', { iconName: 'eye', onClick: () => { actKeep(l); go('list'); } }),
+    btn('Applied', 'btn btn-lg', { iconName: 'check', onClick: () => { actApply(l); go('list'); } }),
+    view === 'dismissed'
+      ? btn('Restore', 'btn btn-lg', { iconName: 'undo', onClick: () => { actRestore(l); go('list'); } })
+      : btn('Out', 'btn btn-lg', { iconName: 'x', onClick: () => { actDismiss(l); go('list'); } })
+  );
+  foot.append(top, bottom);
+  screen.append(foot);
+  return screen;
+}
+
+// ---------- screen: tailor ----------
+function startTailor(listing) {
+  state.tailor = { listing, step: 1, text: '', error: '' };
+  go('tailor');
+  window.api
+    .tailorResume(listing.id)
+    .then((text) => {
+      if (state.tailor?.listing.id === listing.id) {
+        state.tailor.text = text;
+        state.tailor.step = 3;
+        render();
+      }
+    })
+    .catch((e) => {
+      if (state.tailor?.listing.id === listing.id) {
+        state.tailor.error = e.message;
+        render();
+      }
+    });
+  // Second step lights up once the request is in flight.
+  setTimeout(() => {
+    if (state.tailor && !state.tailor.text && state.tailor.step < 2) {
+      state.tailor.step = 2;
+      render();
+    }
+  }, 700);
+}
+
+function screenTailor() {
+  const t = state.tailor;
+  const screen = el('div', 'screen');
+
+  const hdr = el('div', 'hdr');
+  hdr.append(backLink('Listing', () => go('detail')), el('div', 'hdr-right', 'Claude Haiku · ~2¢'));
+  screen.append(hdr);
+
+  const body = el('div', 'scroll pad');
+  body.append(el('div', 'hdr-title', 'Tailored resume'));
+  body.append(
+    el('div', 'sub-line', `${t.listing.role} — ${t.listing.company} · ${state.profile.length || '—'} profile entries`)
+  );
+
+  const prog = el('div', 'progress');
+  ['Profile read', 'Listing parsed', 'Draft written'].forEach((label, i) => {
+    prog.append(el('div', 'pipe-cell' + (t.step > i ? ' on' : ''), label));
+  });
+  body.append(prog);
+
+  if (t.error) body.append(el('div', 'panel', `Failed: ${t.error}`));
+  else if (t.text) body.append(el('div', 'panel', t.text));
+  else body.append(el('div', 'panel', 'Generating… this can take a minute.'));
+  screen.append(body);
+
+  const foot = el('div', 'foot');
+  foot.append(
+    btn('Copy', 'btn btn-acc', {
+      disabled: !t.text,
+      onClick: () => navigator.clipboard.writeText(t.text),
+    }),
+    btn('Save…', 'btn', {
+      disabled: !t.text,
+      onClick: () => {
         const name =
-          `resume-${l.company}-${l.role}`
+          `resume-${t.listing.company}-${t.listing.role}`
             .toLowerCase()
             .replace(/[^a-z0-9]+/g, '-')
             .replace(/(^-|-$)/g, '') + '.md';
-        await window.api.saveText(text, name);
+        window.api.saveText(t.text, name);
+      },
+    }),
+    btn('Close', 'btn', { onClick: () => go('detail') })
+  );
+  screen.append(foot);
+  return screen;
+}
+
+// ---------- screen: profile ----------
+function screenProfile() {
+  const screen = el('div', 'screen');
+  const hdr = el('div', 'hdr');
+  hdr.append(backLink('List', () => go('list')), el('div', 'hdr-right', `${state.profile.length} entries`));
+  screen.append(hdr);
+
+  const body = el('div', 'scroll');
+  const top = el('div', 'pad');
+  top.append(el('div', 'hdr-title', 'Profile'));
+  top.append(el('div', 'sub-line', 'Fit scoring and the resume tailor only know what is written here.'));
+  const grid = el('div', 'grid2');
+  grid.style.marginTop = '10px';
+  grid.append(
+    btn('Add entry', 'btn btn-lg btn-acc', { iconName: 'plus', onClick: () => addChunkPrompt() }),
+    btn('Import resume', 'btn btn-lg', { iconName: 'file', onClick: () => runImport() })
+  );
+  top.append(grid);
+  body.append(top);
+
+  for (const c of state.profile) {
+    const row = el('div', 'chunk');
+    row.append(el('span', 'tag tag-quiet', c.kind), el('span', 'chunk-title', c.title));
+    row.append(iconBtn('pencil', { title: 'Edit', onClick: () => editChunkPrompt(c) }));
+    const bodyText = el('div', 'chunk-body');
+    bodyText.append(el('div', 'chunk-text', c.content));
+    row.append(bodyText);
+    body.append(row);
+  }
+  if (!state.profile.length) body.append(el('div', 'empty', 'No profile entries yet. Import a resume to fill this in.'));
+  screen.append(body);
+
+  const foot = el('div', 'foot');
+  foot.append(el('div', 'foot-note', 'Stored in profile_chunks'));
+  screen.append(foot);
+  return screen;
+}
+
+// Minimal add/edit using the structured field schema already in the app.
+function addChunkPrompt() {
+  const kind = 'experience';
+  const PF = window.ProfileFields;
+  const fields = {};
+  const title = prompt('Title (e.g. IT Support Intern — Acme, 2025)');
+  if (!title) return;
+  const content = prompt('Details — responsibilities, tools, outcomes');
+  if (!content) return;
+  fields.role = title;
+  fields.bullets = content;
+  window.api
+    .addChunk({ kind, title, content, fields: PF ? fields : undefined })
+    .then((p) => {
+      state.profile = p;
+      render();
+    })
+    .catch((e) => {
+      state.error = e.message;
+      render();
+    });
+}
+
+function editChunkPrompt(c) {
+  const title = prompt('Title', c.title);
+  if (title == null) return;
+  const content = prompt('Details', c.content);
+  if (content == null) return;
+  window.api
+    .updateChunk({ id: c.id, kind: c.kind, title, content })
+    .then((p) => {
+      state.profile = p;
+      render();
+    })
+    .catch((e) => {
+      state.error = e.message;
+      render();
+    });
+}
+
+// ---------- screen: resume import review ----------
+function runImport() {
+  window.api
+    .importResume()
+    .then((result) => {
+      if (!result) return;
+      state.importResult = {
+        fileName: result.fileName,
+        method: result.method,
+        rows: result.chunks.map((c) => ({ ...c, on: c.kind !== 'other' })),
+      };
+      go('import');
+    })
+    .catch((e) => {
+      state.error = `Import failed: ${e.message}`;
+      render();
+    });
+}
+
+function screenImport() {
+  const imp = state.importResult;
+  const screen = el('div', 'screen');
+  const hdr = el('div', 'hdr');
+  hdr.append(
+    backLink('Profile', () => go('profile')),
+    el('div', 'hdr-right', imp.method === 'ai' ? 'Claude Haiku · ~1¢' : 'Headings · free')
+  );
+  screen.append(hdr);
+
+  const body = el('div', 'scroll');
+  const top = el('div', 'pad');
+  top.append(el('div', 'hdr-title', 'Review import'));
+  top.append(
+    el('div', 'sub-line', `${imp.fileName} · ${imp.rows.length} entries found. Nothing is saved until you confirm.`)
+  );
+  body.append(top);
+
+  imp.rows.forEach((r, i) => {
+    const row = el('div', 'imp-row' + (r.on ? '' : ' off'));
+    const box = el('span', 'box');
+    box.append(icon('check', 9));
+    const right = el('div');
+    const head = el('div');
+    head.style.display = 'flex';
+    head.style.gap = '7px';
+    head.style.alignItems = 'center';
+    head.append(el('span', 'tag tag-quiet', r.kind), el('span', 'chunk-title', r.title));
+    right.append(head, el('div', 'chunk-text', r.content));
+    row.append(box, right);
+    row.addEventListener('click', () => {
+      imp.rows[i].on = !imp.rows[i].on;
+      render();
+    });
+    body.append(row);
+  });
+  screen.append(body);
+
+  const picked = imp.rows.filter((r) => r.on);
+  const foot = el('div', 'foot');
+  foot.append(
+    btn('Cancel', 'btn', { onClick: () => go('profile') }),
+    btn(`Add ${picked.length} to profile`, 'btn btn-acc', {
+      disabled: !picked.length,
+      onClick: () => {
+        window.api
+          .addChunks(picked.map(({ kind, title, content }) => ({ kind, title, content })))
+          .then((p) => go('profile', { profile: p, importResult: null }))
+          .catch((e) => {
+            state.error = e.message;
+            render();
+          });
+      },
+    })
+  );
+  screen.append(foot);
+  return screen;
+}
+
+// ---------- screen: tab editor / filters ----------
+function screenTabs() {
+  const editing = state.searches.find((s) => s.id === state.editingSearchId);
+  const filtersOnly = state.editingSearchId === 'filters';
+  const screen = el('div', 'screen');
+
+  const hdr = el('div', 'hdr');
+  hdr.append(backLink('List', () => go('list')), el('div', 'hdr-right', filtersOnly ? 'View filters' : 'Searches table'));
+  screen.append(hdr);
+
+  const body = el('div', 'scroll pad');
+  body.append(el('div', 'hdr-title', filtersOnly ? 'Filters' : editing ? 'Edit tab' : 'New tab'));
+
+  const REGIONS = window.JobLocations.REGION_LABELS;
+
+  if (filtersOnly) {
+    body.append(el('div', 'sub-line', 'Narrow the visible list. These do not change what the scraper collects.'));
+    const f = el('div', 'field');
+    f.style.marginTop = '10px';
+    f.append(el('label', 'f-label', 'Regions'));
+    const chips = el('div', 'chips');
+    for (const [key, label] of Object.entries(REGIONS)) {
+      const chip = el('button', 'chip' + (state.activeRegions.has(key) ? ' on' : ''), label);
+      chip.addEventListener('click', () => {
+        if (state.activeRegions.has(key)) state.activeRegions.delete(key);
+        else state.activeRegions.add(key);
+        render();
+      });
+      chips.append(chip);
+    }
+    f.append(chips);
+    body.append(f);
+
+    const f2 = el('div', 'field');
+    f2.append(el('label', 'f-label', 'Text'));
+    const input = el('input', 'f-input');
+    input.value = state.locationFilter;
+    input.placeholder = 'City, state or company';
+    input.addEventListener('input', () => {
+      state.locationFilter = input.value.trim();
+    });
+    f2.append(input);
+    body.append(f2);
+    screen.append(body);
+
+    const foot = el('div', 'foot');
+    foot.append(
+      btn('Clear', 'btn', {
+        onClick: () => {
+          state.activeRegions.clear();
+          state.locationFilter = '';
+          render();
+        },
+      }),
+      btn('Done', 'btn btn-acc', { onClick: () => go('list') })
+    );
+    screen.append(foot);
+    return screen;
+  }
+
+  body.append(el('div', 'sub-line', 'Keywords match the job title; regions decide which locations count.'));
+
+  const mkField = (label, value, placeholder) => {
+    const f = el('div', 'field');
+    f.append(el('label', 'f-label', label));
+    const input = el('input', 'f-input');
+    input.value = value ?? '';
+    if (placeholder) input.placeholder = placeholder;
+    f.append(input);
+    body.append(f);
+    return input;
+  };
+
+  const wrapTop = el('div');
+  wrapTop.style.marginTop = '10px';
+  body.append(wrapTop);
+  const nameInput = mkField('Tab name', editing?.label, 'Data Analyst');
+  const kwInput = mkField('Keywords', (editing?.keywords ?? []).join(', '), 'data analyst, analytics');
+
+  const regionKeys = Object.keys(REGIONS);
+  const chosen = new Set((editing?.locations ?? []).filter((l) => regionKeys.includes(l)));
+  const rf = el('div', 'field');
+  rf.append(el('label', 'f-label', 'Regions'));
+  const chips = el('div', 'chips');
+  for (const [key, label] of Object.entries(REGIONS)) {
+    const chip = el('button', 'chip' + (chosen.has(key) ? ' on' : ''), label);
+    chip.addEventListener('click', () => {
+      if (chosen.has(key)) chosen.delete(key);
+      else chosen.add(key);
+      chip.classList.toggle('on', chosen.has(key));
+    });
+    chips.append(chip);
+  }
+  rf.append(chips);
+  body.append(rf);
+
+  const extraInput = mkField(
+    'Extra locations',
+    (editing?.locations ?? []).filter((l) => !regionKeys.includes(l)).join(', '),
+    'blank + no regions = anywhere'
+  );
+
+  if (editing) {
+    const n = state.listings.filter((l) => l.search_id === editing.id).length;
+    body.append(el('div', 'note', `${n} listings carry this tab. Deleting the tab keeps them under All.`));
+  }
+  screen.append(body);
+
+  const collect = () => ({
+    label: nameInput.value.trim(),
+    keywords: kwInput.value.split(',').map((s) => s.trim()).filter(Boolean),
+    locations: [...chosen, ...extraInput.value.split(',').map((s) => s.trim()).filter(Boolean)],
+  });
+
+  const foot = el('div', 'foot');
+  if (editing) {
+    foot.append(
+      btn('Delete', 'btn btn-danger', {
+        iconName: 'trash',
+        onClick: () => {
+          if (!confirm(`Delete the "${editing.label}" tab?`)) return;
+          window.api.deleteSearch(editing.id).then((s) => {
+            state.activeTab = 'all';
+            go('list', { searches: s });
+          });
+        },
       })
     );
-    out.append(row, body);
-  } catch (e) {
-    status.textContent = `Failed: ${e.message}`;
-  } finally {
-    btn.disabled = false;
   }
+  const spacer = el('div');
+  spacer.style.flex = '1';
+  foot.append(spacer);
+  foot.append(
+    btn('Cancel', 'btn', { onClick: () => go('list') }),
+    btn('Save', 'btn btn-acc', {
+      onClick: () => {
+        const payload = collect();
+        if (!payload.label || !payload.keywords.length) {
+          state.error = 'A tab needs a name and at least one keyword.';
+          render();
+          return;
+        }
+        const call = editing
+          ? window.api.updateSearch({ id: editing.id, ...payload })
+          : window.api.addSearch(payload);
+        call
+          .then((s) => go('list', { searches: s }))
+          .catch((e) => {
+            state.error = e.message;
+            render();
+          });
+      },
+    })
+  );
+  screen.append(foot);
+  return screen;
 }
 
-const EMPTY_TEXT = {
-  new: 'No new listings. The scraper runs every 3 hours.',
-  seen: 'Nothing marked seen — use 👁 on a new listing to park it here.',
-  progress: 'Nothing applied to yet — hit "Applied ✓" on a listing.',
-  dismissed: 'Nothing dismissed.',
-};
-
-function renderList() {
-  if (detailListing) {
-    renderDetail(detailListing);
-    return;
-  }
-  listEl.replaceChildren();
-  const listings = visibleListings();
-
-  if (!listings.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty';
-    empty.textContent = locationFilter
-      ? 'Nothing here matches the location filter.'
-      : EMPTY_TEXT[activeView];
-    listEl.appendChild(empty);
-    return;
-  }
-
-  for (const l of listings) listEl.appendChild(makeCard(l));
+// ---------- screen: triage deck ----------
+function triageQueue() {
+  return inView('new');
 }
 
-function rerender() {
-  renderViews();
-  renderTabs();
-  // The detail view (and the profile panel) own the whole body; hide the
-  // chrome that filters a list you're not currently looking at. Checking
-  // profileOpen keeps a background poll from un-hiding it.
-  const chrome = detailListing || profileOpen ? 'none' : '';
-  viewsEl.style.display = chrome;
-  tabsEl.style.display = chrome;
-  // Clearing the inline style (rather than setting 'block') lets the
-  // widget's collapsed-by-default rule keep applying.
-  filterRowEl.style.display = chrome;
-  filterToggleEl.style.display = chrome;
-  renderList();
+function screenTriage() {
+  const queue = triageQueue();
+  const screen = el('div', 'screen');
+  const l = queue[state.triageIndex];
+
+  // Always 12 segments — a fixed-width progress bar, not one tick per card.
+  const ticks = el('div', 'ticks');
+  const TICKS = 12;
+  const filled = queue.length ? Math.round(((state.triageIndex + 1) / queue.length) * TICKS) : 0;
+  for (let i = 0; i < TICKS; i++) ticks.append(el('div', 'tick' + (i < filled ? ' on' : '')));
+  screen.append(ticks);
+
+  const hdr = el('div', 'hdr');
+  hdr.append(
+    backLink('List', () => go('list')),
+    el('div', 'hdr-right', queue.length ? `${state.triageIndex + 1} / ${queue.length}` : '0 / 0')
+  );
+  screen.append(hdr);
+
+  if (!l) {
+    const done = el('div', 'scroll pad');
+    done.append(el('div', 'empty', 'Queue clear. Nothing left to triage.'));
+    screen.append(done);
+    const foot = el('div', 'foot');
+    foot.append(btn('Back to list', 'btn btn-lg btn-acc', { onClick: () => go('list') }));
+    screen.append(foot);
+    return screen;
+  }
+
+  const body = el('div', 'scroll pad');
+  const head = el('div', 'd-head');
+  const left = el('div');
+  left.append(el('div', 't-role', l.role), el('div', 't-company', l.company));
+  const right = el('div');
+  right.append(
+    el('div', `d-score t-score ${scoreClass(l.fit_score ?? 0)}`, l.fit_score == null ? '–' : String(l.fit_score)),
+    el('div', 'd-fit', 'Fit')
+  );
+  head.append(left, right);
+  body.append(head);
+
+  const bars = scoreBars(l, { thick: true });
+  if (bars) body.append(bars);
+  const tags = termTags(l);
+  if (tags) body.append(tags);
+
+  const tab = state.searches.find((s) => s.id === l.search_id)?.label;
+  body.append(
+    el(
+      'div',
+      'd-meta',
+      [l.location, l.found_at ? `found ${fmtDate(l.found_at)}` : null, sourceOf(l.url)].filter(Boolean).join(' · ')
+    )
+  );
+  const snippet = (l.description ?? '').slice(0, 320);
+  body.append(el('div', 'desc', snippet || 'No description captured for this listing.'));
+  screen.append(body);
+
+  const foot = el('div', 'foot foot-grid');
+  const verbs = el('div', 'grid3');
+  verbs.append(
+    btn('Skip', 'btn btn-lg', { iconName: 'x', onClick: () => triageAct('skip') }),
+    btn('Keep', 'btn btn-lg', { iconName: 'eye', onClick: () => triageAct('keep') }),
+    btn('Apply', 'btn btn-lg btn-acc', { iconName: 'check', onClick: () => triageAct('apply') })
+  );
+  const hint = el('div', 'foot-note');
+  hint.append(el('span', null, 'D skip · S keep · A apply · J/K move'));
+  const open = el('button', 'foot-note');
+  open.style.width = 'auto';
+  open.append(el('span', null, 'Open ↗'));
+  open.addEventListener('click', () => l.url && window.api.openUrl(l.url));
+  hint.append(open);
+  foot.append(verbs, hint);
+  screen.append(foot);
+  return screen;
 }
 
-function render(listings) {
-  all = listings;
-  if (activeTab !== 'all' && !searches.some((s) => s.id === activeTab)) {
-    activeTab = 'all';
-  }
-  clearError();
-  rerender();
+function triageAct(verb) {
+  const queue = triageQueue();
+  const l = queue[state.triageIndex];
+  if (!l) return;
+  if (verb === 'keep') actKeep(l);
+  else if (verb === 'apply') actApply(l);
+  else if (verb === 'skip') actDismiss(l);
+  // The acted-on card leaves the queue, so the index already points at the
+  // next card; clamp when the tail is reached.
+  const remaining = triageQueue();
+  if (state.triageIndex >= remaining.length) state.triageIndex = Math.max(0, remaining.length - 1);
+  render();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (state.mode !== 'triage') return;
+  if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'd') triageAct('skip');
+  else if (k === 's') triageAct('keep');
+  else if (k === 'a') triageAct('apply');
+  else if (k === 'j') {
+    state.triageIndex = Math.min(state.triageIndex + 1, Math.max(0, triageQueue().length - 1));
+    render();
+  } else if (k === 'k') {
+    state.triageIndex = Math.max(0, state.triageIndex - 1);
+    render();
+  } else if (e.key === 'Escape') go('list');
+});
+
+// ---------- render ----------
+function render() {
+  const screens = {
+    list: screenList,
+    detail: screenDetail,
+    tailor: screenTailor,
+    profile: screenProfile,
+    import: screenImport,
+    tabs: screenTabs,
+    triage: screenTriage,
+  };
+  const build = screens[state.mode] ?? screenList;
+  app.replaceChildren(build());
 }
 
 // ---------- wiring ----------
+window.api.onListings((listings) => {
+  state.listings = listings;
+  state.loaded = true;
+  state.error = '';
+  if (state.detailListing) {
+    const fresh = listings.find((l) => l.id === state.detailListing.id);
+    if (fresh) state.detailListing = { ...state.detailListing, ...fresh };
+  }
+  render();
+});
 
-window.api.onListings(render);
-window.api.onError(showError);
+window.api.onError((msg) => {
+  state.error = msg;
+  render();
+});
+
+if (new URLSearchParams(location.search).get('mode') === 'widget') {
+  document.body.classList.add('widget');
+} else {
+  document.body.classList.add('full');
+}
 
 window.api.getSearches().then((s) => {
-  searches = s;
-  rerender();
+  state.searches = s;
+  render();
+});
+window.api.getProfile().then((p) => {
+  state.profile = p;
 });
 
-// In widget mode the filter row is collapsed behind this toggle; the label
-// reports how many filters are active so a hidden filter is never a mystery.
-const filterRowEl = document.getElementById('filter-row');
-const filterToggleEl = document.getElementById('filter-toggle');
-
-function updateFilterToggle() {
-  const count = activeRegions.size + (locationFilter ? 1 : 0);
-  filterToggleEl.textContent = count ? `Filters · ${count} active` : 'Filters';
-  filterToggleEl.classList.toggle('has-filters', count > 0);
-}
-
-filterToggleEl.addEventListener('click', () => {
-  filterRowEl.classList.toggle('open');
-});
-
-// Region filter chips, built from the shared region list.
-const regionChipsEl = document.getElementById('region-chips');
-for (const [key, label] of Object.entries(window.JobLocations.REGION_LABELS)) {
-  const chip = document.createElement('button');
-  chip.className = 'region-chip';
-  chip.textContent = label;
-  chip.title = `Show only listings in ${label}`;
-  chip.addEventListener('click', () => {
-    if (activeRegions.has(key)) activeRegions.delete(key);
-    else activeRegions.add(key);
-    chip.classList.toggle('on', activeRegions.has(key));
-    updateFilterToggle();
-    renderList();
-  });
-  regionChipsEl.appendChild(chip);
-}
-
-locFilterEl.addEventListener('input', () => {
-  locationFilter = locFilterEl.value.trim();
-  updateFilterToggle();
-  renderList();
-});
-
-updateFilterToggle();
-
-refreshBtn.addEventListener('click', async () => {
-  refreshBtn.disabled = true;
-  searches = await window.api.getSearches();
-  await window.api.refresh();
-  refreshBtn.disabled = false;
-});
-
-document.getElementById('add-cancel').addEventListener('click', closeForm);
-
-addDeleteBtn.addEventListener('click', async () => {
-  if (!editingSearchId) return;
-  const label = searches.find((s) => s.id === editingSearchId)?.label;
-  if (!confirm(`Delete the "${label}" tab? Its listings stay under All.`)) return;
-  try {
-    searches = await window.api.deleteSearch(editingSearchId);
-    closeForm();
-    activeTab = 'all';
-    clearError();
-    rerender();
-  } catch (e) {
-    showError(`Could not delete tab: ${e.message}`);
-  }
-});
-
-addSaveBtn.addEventListener('click', async () => {
-  const label = document.getElementById('add-label').value.trim();
-  const toList = (id) =>
-    document.getElementById(id).value.split(',').map((s) => s.trim()).filter(Boolean);
-  const keywords = toList('add-keywords');
-  const locations = [...formRegions, ...toList('add-locations')];
-
-  if (!label || !keywords.length) {
-    showError('A tab needs a name and at least one keyword.');
-    return;
-  }
-  try {
-    searches = editingSearchId
-      ? await window.api.updateSearch({ id: editingSearchId, label, keywords, locations })
-      : await window.api.addSearch({ label, keywords, locations });
-    closeForm();
-    clearError();
-    rerender();
-  } catch (e) {
-    showError(`Could not save tab: ${e.message}`);
-  }
-});
-
-// ---------- tailor resume modal ----------
-
-const tailorModal = document.getElementById('tailor-modal');
-const tailorTitle = document.getElementById('tailor-title');
-const tailorStatus = document.getElementById('tailor-status');
-const tailorContent = document.getElementById('tailor-content');
-let tailorText = '';
-let tailorFileName = 'resume.md';
-
-async function openTailorModal(l) {
-  tailorTitle.textContent = `Resume for: ${l.role} — ${l.company}`;
-  tailorStatus.textContent =
-    'Generating tailored resume… this can take a minute or two.';
-  tailorStatus.style.display = 'block';
-  tailorContent.style.display = 'none';
-  tailorText = '';
-  tailorFileName = `resume-${l.company}-${l.role}`
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '') + '.md';
-  tailorModal.style.display = 'flex';
-  try {
-    tailorText = await window.api.tailorResume(l.id);
-    tailorContent.textContent = tailorText;
-    tailorStatus.style.display = 'none';
-    tailorContent.style.display = 'block';
-  } catch (e) {
-    tailorStatus.textContent = `Failed: ${e.message}`;
-  }
-}
-
-document.getElementById('tailor-close').addEventListener('click', () => {
-  tailorModal.style.display = 'none';
-});
-
-document.getElementById('tailor-copy').addEventListener('click', async () => {
-  if (!tailorText) return;
-  await navigator.clipboard.writeText(tailorText);
-  tailorStatus.textContent = 'Copied to clipboard.';
-  tailorStatus.style.display = 'block';
-});
-
-document.getElementById('tailor-save').addEventListener('click', async () => {
-  if (!tailorText) return;
-  const path = await window.api.saveText(tailorText, tailorFileName);
-  if (path) {
-    tailorStatus.textContent = `Saved to ${path}`;
-    tailorStatus.style.display = 'block';
-  }
-});
-
-// ---------- profile panel ----------
-
-const profileBtn = document.getElementById('profile-btn');
-const profilePanel = document.getElementById('profile-panel');
-const chunkListEl = document.getElementById('chunk-list');
-let profileOpen = false;
-
-function renderChunks(chunks) {
-  chunkListEl.replaceChildren();
-  if (!chunks.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty';
-    empty.textContent =
-      'No profile yet. Add chunks of your experience, education, and skills above — fit scoring and resume tailoring use only what you put here.';
-    chunkListEl.appendChild(empty);
-    return;
-  }
-  for (const c of chunks) chunkListEl.appendChild(makeChunkRow(c));
-}
-
-// A chunk renders read-only until you hit ✎, then swaps to inline fields.
-function makeChunkRow(c) {
-  const div = document.createElement('div');
-  div.className = 'chunk';
-
-  function renderRead() {
-    div.replaceChildren();
-
-    const head = document.createElement('div');
-    head.className = 'chunk-head';
-
-    const kind = document.createElement('span');
-    kind.className = 'chunk-kind';
-    kind.textContent = c.kind;
-
-    const title = document.createElement('span');
-    title.className = 'chunk-title';
-    title.textContent = c.title;
-
-    const edit = document.createElement('button');
-    edit.className = 'chunk-edit';
-    edit.textContent = '✎';
-    edit.title = 'Edit this entry';
-    edit.addEventListener('click', renderEdit);
-
-    const del = document.createElement('button');
-    del.className = 'dismiss';
-    del.textContent = '✕';
-    del.title = 'Delete this entry';
-    del.addEventListener('click', async () => {
-      if (!confirm(`Delete "${c.title}" from your profile?`)) return;
-      try {
-        renderChunks(await window.api.deleteChunk(c.id));
-      } catch (e) {
-        showError(`Could not delete: ${e.message}`);
-      }
-    });
-
-    head.append(kind, title, edit, del);
-
-    const content = document.createElement('div');
-    content.className = 'chunk-content';
-    content.textContent = c.content;
-    // Double-clicking the text is a second, more discoverable way in.
-    content.title = 'Double-click to edit';
-    content.addEventListener('dblclick', renderEdit);
-
-    div.append(head, content);
-  }
-
-  function renderEdit() {
-    const PF = window.ProfileFields;
-    div.replaceChildren();
-
-    // Working copy of the entry's structured fields. Entries created before
-    // structured fields existed get seeded from their title/content.
-    let working = PF.isEmptyFields(c.fields)
-      ? PF.fieldsFromLegacy(c.kind, c.title, c.content)
-      : { ...c.fields };
-
-    const kindRow = document.createElement('div');
-    kindRow.className = 'chunk-edit-row';
-    const kindLabel = document.createElement('label');
-    kindLabel.className = 'field-label';
-    kindLabel.textContent = 'Type';
-    const kindSel = document.createElement('select');
-    kindSel.className = 'imp-kind';
-    for (const k of KINDS) {
-      const opt = document.createElement('option');
-      opt.value = k;
-      opt.textContent = k;
-      if (k === c.kind) opt.selected = true;
-      kindSel.appendChild(opt);
-    }
-    const kindWrap = document.createElement('div');
-    kindWrap.className = 'field field-half';
-    kindWrap.append(kindLabel, kindSel);
-    kindRow.append(kindWrap);
-
-    const grid = document.createElement('div');
-    grid.className = 'field-grid';
-
-    // Rebuild the field set whenever the kind changes — each kind has its
-    // own shape, and values for shared keys (dates, location) carry over.
-    function buildFields() {
-      grid.replaceChildren();
-      const schema = PF.FIELD_SCHEMAS[kindSel.value] ?? PF.FIELD_SCHEMAS.other;
-      for (const f of schema) {
-        const wrap = document.createElement('div');
-        wrap.className = 'field' + (f.full || f.type === 'textarea' ? '' : ' field-half');
-
-        const label = document.createElement('label');
-        label.className = 'field-label';
-        label.textContent = f.label + (f.required ? ' *' : '');
-        wrap.append(label);
-
-        let input;
-        if (f.type === 'textarea') {
-          input = document.createElement('textarea');
-        } else {
-          input = document.createElement('input');
-          input.type = f.type === 'month' ? 'month' : 'text';
-        }
-        input.value = working[f.key] ?? '';
-        if (f.placeholder) input.placeholder = f.placeholder;
-        input.addEventListener('input', () => {
-          working[f.key] = input.value;
-        });
-        wrap.append(input);
-
-        // "Present" checkbox disables the paired end-date input.
-        if (f.present) {
-          const presentWrap = document.createElement('label');
-          presentWrap.className = 'field-present';
-          const cb = document.createElement('input');
-          cb.type = 'checkbox';
-          cb.checked = !!working.present;
-          const sync = () => {
-            working.present = cb.checked;
-            input.disabled = cb.checked;
-            if (cb.checked) input.value = '';
-          };
-          cb.addEventListener('change', sync);
-          presentWrap.append(cb, document.createTextNode(' Present'));
-          wrap.append(presentWrap);
-          sync();
-        }
-
-        if (f.hint) {
-          const hint = document.createElement('div');
-          hint.className = 'field-hint';
-          hint.textContent = f.hint;
-          wrap.append(hint);
-        }
-        grid.append(wrap);
-      }
-    }
-
-    kindSel.addEventListener('change', buildFields);
-    buildFields();
-
-    const actions = document.createElement('div');
-    actions.className = 'chunk-actions';
-
-    const cancel = document.createElement('button');
-    cancel.className = 'chunk-cancel';
-    cancel.textContent = 'Cancel';
-    cancel.addEventListener('click', renderRead);
-
-    const save = document.createElement('button');
-    save.className = 'chunk-save-btn';
-    save.textContent = 'Save';
-    save.addEventListener('click', async () => {
-      const kind = kindSel.value;
-      const schema = PF.FIELD_SCHEMAS[kind] ?? PF.FIELD_SCHEMAS.other;
-      const missing = schema
-        .filter((f) => f.required && !String(working[f.key] ?? '').trim())
-        .map((f) => f.label);
-      if (missing.length) {
-        showError(`Required: ${missing.join(', ')}`);
-        return;
-      }
-      // title/content are derived so scoring and the resume tailor keep
-      // reading one consistent text body.
-      const title = PF.deriveTitle(kind, working);
-      const content = PF.deriveContent(kind, working);
-      if (!title || !content) {
-        showError('Fill in enough detail for this entry to be useful.');
-        return;
-      }
-      save.disabled = true;
-      try {
-        const fresh = await window.api.updateChunk({
-          id: c.id,
-          kind,
-          title,
-          content,
-          fields: working,
-        });
-        clearError();
-        renderChunks(fresh);
-      } catch (e) {
-        save.disabled = false;
-        showError(`Could not save: ${e.message}`);
-      }
-    });
-
-    actions.append(cancel, save);
-    div.append(kindRow, grid, actions);
-    grid.querySelector('input, textarea')?.focus();
-  }
-
-  renderRead();
-  return div;
-}
-
-function setProfileOpen(open) {
-  profileOpen = open;
-  profileBtn.classList.toggle('active', open);
-  profilePanel.style.display = open ? 'block' : 'none';
-  for (const el of [viewsEl, tabsEl, listEl]) {
-    el.style.display = open ? 'none' : '';
-  }
-  document.getElementById('filter-row').style.display = open ? 'none' : '';
-  addFormEl.style.display = 'none';
-  if (open) {
-    window.api.getProfile().then(renderChunks);
-  }
-}
-
-profileBtn.addEventListener('click', () => setProfileOpen(!profileOpen));
-
-// ---------- resume import (review before saving) ----------
-
-const KINDS = ['experience', 'education', 'skill', 'project', 'certification', 'other'];
-const importReview = document.getElementById('import-review');
-const importStatus = document.getElementById('import-status');
-const importList = document.getElementById('import-list');
-const importActions = document.getElementById('import-actions');
-
-function renderImportRows(chunks) {
-  importList.replaceChildren();
-  for (const c of chunks) {
-    const row = document.createElement('div');
-    row.className = 'imp';
-
-    const check = document.createElement('input');
-    check.type = 'checkbox';
-    // Contact-header junk is usually the only 'other' — leave it unchecked.
-    check.checked = c.kind !== 'other';
-
-    const fields = document.createElement('div');
-    fields.className = 'imp-fields';
-
-    const top = document.createElement('div');
-    top.className = 'imp-row';
-
-    const kind = document.createElement('select');
-    kind.className = 'imp-kind';
-    for (const k of KINDS) {
-      const opt = document.createElement('option');
-      opt.value = k;
-      opt.textContent = k;
-      if (k === c.kind) opt.selected = true;
-      kind.appendChild(opt);
-    }
-
-    const title = document.createElement('input');
-    title.type = 'text';
-    title.value = c.title;
-
-    top.append(kind, title);
-
-    const content = document.createElement('textarea');
-    content.value = c.content;
-
-    fields.append(top, content);
-    row.append(check, fields);
-    importList.appendChild(row);
-
-    row._read = () => ({
-      selected: check.checked,
-      kind: kind.value,
-      title: title.value.trim(),
-      content: content.value.trim(),
-    });
-  }
-}
-
-document.getElementById('import-btn').addEventListener('click', async () => {
-  importReview.style.display = 'block';
-  importActions.style.display = 'none';
-  importList.replaceChildren();
-  importStatus.textContent = 'Choose a file…';
-  try {
-    const result = await window.api.importResume();
-    if (!result) {
-      importReview.style.display = 'none';
-      return;
-    }
-    importStatus.textContent =
-      `Found ${result.chunks.length} entries in ${result.fileName}` +
-      (result.method === 'headings'
-        ? ' (parsed by section headings — no API key set).'
-        : '.') +
-      ' Review and edit below, then add the ones you want.';
-    renderImportRows(result.chunks);
-    importActions.style.display = 'flex';
-  } catch (e) {
-    importStatus.textContent = `Import failed: ${e.message}`;
-  }
-});
-
-document.getElementById('import-cancel').addEventListener('click', () => {
-  importReview.style.display = 'none';
-  importList.replaceChildren();
-});
-
-document.getElementById('import-save').addEventListener('click', async () => {
-  const picked = [...importList.children]
-    .map((row) => row._read())
-    .filter((c) => c.selected && c.title && c.content)
-    .map(({ kind, title, content }) => ({ kind, title, content }));
-  if (!picked.length) {
-    importStatus.textContent = 'Nothing selected.';
-    return;
-  }
-  try {
-    renderChunks(await window.api.addChunks(picked));
-    importReview.style.display = 'none';
-    importList.replaceChildren();
-    clearError();
-  } catch (e) {
-    importStatus.textContent = `Could not save: ${e.message}`;
-  }
-});
-
-document.getElementById('chunk-save').addEventListener('click', async () => {
-  const kind = document.getElementById('chunk-kind').value;
-  const title = document.getElementById('chunk-title').value.trim();
-  const content = document.getElementById('chunk-content').value.trim();
-  if (!title || !content) {
-    showError('A profile chunk needs a title and content.');
-    return;
-  }
-  try {
-    renderChunks(await window.api.addChunk({ kind, title, content }));
-    document.getElementById('chunk-title').value = '';
-    document.getElementById('chunk-content').value = '';
-    clearError();
-  } catch (e) {
-    showError(`Could not save chunk: ${e.message}`);
-  }
-});
-
-// ---------- window mode ----------
-
-const isWidget = new URLSearchParams(location.search).get('mode') === 'widget';
-if (isWidget) document.body.classList.add('widget');
-
-document.getElementById('widget-btn').addEventListener('click', () =>
-  window.api.setMode('widget')
-);
-document.getElementById('expand-btn').addEventListener('click', () =>
-  window.api.setMode('full')
-);
-document.getElementById('hide-btn').addEventListener('click', () =>
-  window.api.minimize()
-);
-
-document.getElementById('quit').addEventListener('click', () => window.api.quit());
+render();
