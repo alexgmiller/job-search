@@ -314,20 +314,30 @@ function makeCard(l) {
 
   const card = document.createElement('div');
   card.className = 'card';
-  card.append(makeCardBody(l));
+  // Title/company/meta and the fit badge share the top row; actions sit on
+  // their own row underneath so long role titles get the full card width.
+  const main = document.createElement('div');
+  main.className = 'card-main';
+  main.append(makeCardBody(l));
   const badge = fitBadge(l);
-  if (badge) card.append(badge);
+  if (badge) main.append(badge);
+  card.append(main);
+
+  const actions = document.createElement('div');
+  actions.className = 'card-actions';
+  card.append(actions);
+
   // Clicking a card opens the in-app detail view; the posting itself is one
   // click further in. This is what makes widget mode usable — previously the
   // only possible action was launching a browser.
   card.addEventListener('click', () => openDetail(l));
 
   if (activeView === 'new') {
-    card.append(tailorButton(l), seenButton(l), applyButton(l), dismissButton(l));
+    actions.append(tailorButton(l), seenButton(l), applyButton(l), dismissButton(l));
   } else if (activeView === 'seen') {
-    card.append(tailorButton(l), applyButton(l), dismissButton(l));
+    actions.append(tailorButton(l), applyButton(l), dismissButton(l));
   } else if (activeView === 'dismissed') {
-    card.append(restoreButton(l));
+    actions.append(restoreButton(l));
   } else {
     // In Progress: status pipeline + notes
     const status = document.createElement('select');
@@ -377,7 +387,7 @@ function makeCard(l) {
       notesArea.focus();
     });
 
-    card.append(status, notesBtn, tailorButton(l));
+    actions.append(status, notesBtn, tailorButton(l));
   }
 
   wrap.append(card);

@@ -7,6 +7,7 @@ const {
   dialog,
   ipcMain,
   nativeImage,
+  nativeTheme,
   shell,
 } = require('electron');
 const fs = require('fs');
@@ -391,6 +392,9 @@ function createWindow(mode = loadSettings().mode ?? 'full') {
     x: widget ? saved?.x : undefined,
     y: widget ? saved?.y : undefined,
     show: false,
+    // Match the stylesheet's --bg so the window doesn't flash white before
+    // the page paints (very visible in dark mode).
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#14161a' : '#f4f5f7',
     frame: !widget,
     alwaysOnTop: widget,
     skipTaskbar: widget,
