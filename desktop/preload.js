@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   setMode: (mode) => ipcRenderer.invoke('set-mode', mode),
   minimize: () => ipcRenderer.invoke('minimize'),
   getSearches: () => ipcRenderer.invoke('get-searches'),
+  getListing: (id) => ipcRenderer.invoke('get-listing', id),
   dismiss: (id) => ipcRenderer.invoke('dismiss', id),
   restore: (id) => ipcRenderer.invoke('restore', id),
   addSearch: (search) => ipcRenderer.invoke('add-search', search),

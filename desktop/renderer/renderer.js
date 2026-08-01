@@ -317,9 +317,10 @@ function makeCard(l) {
   card.append(makeCardBody(l));
   const badge = fitBadge(l);
   if (badge) card.append(badge);
-  card.addEventListener('click', () => {
-    if (l.url) window.api.openUrl(l.url);
-  });
+  // Clicking a card opens the in-app detail view; the posting itself is one
+  // click further in. This is what makes widget mode usable — previously the
+  // only possible action was launching a browser.
+  card.addEventListener('click', () => openDetail(l));
 
   if (activeView === 'new') {
     card.append(tailorButton(l), seenButton(l), applyButton(l), dismissButton(l));
@@ -383,6 +384,238 @@ function makeCard(l) {
   return wrap;
 }
 
+// ---------- detail view ----------
+// Rendered in place of the list, so it works identically in the compact
+// widget and the full window.
+
+let detailListing = null;
+
+function openDetail(listing) {
+  detailListing = listing;
+  rerender();
+  // Description isn't in the poll payload; fill it in when it arrives.
+  window.api
+    .getListing(listing.id)
+    .then((full) => {
+      if (full && detailListing && detailListing.id === full.id) {
+        detailListing = { ...detailListing, ...full };
+        renderList();
+      }
+    })
+    .catch(() => {});
+}
+
+function closeDetail() {
+  detailListing = null;
+  rerender();
+}
+
+function detailAction(label, className, title, fn) {
+  const btn = document.createElement('button');
+  btn.className = className;
+  btn.textContent = label;
+  if (title) btn.title = title;
+  btn.addEventListener('click', fn);
+  return btn;
+}
+
+function renderDetail(l) {
+  listEl.replaceChildren();
+
+  const wrap = document.createElement('div');
+  wrap.className = 'detail';
+
+  const back = document.createElement('button');
+  back.className = 'detail-back';
+  back.textContent = '← Back';
+  back.addEventListener('click', closeDetail);
+  wrap.append(back);
+
+  const role = document.createElement('div');
+  role.className = 'detail-role';
+  role.textContent = l.role;
+
+  const company = document.createElement('div');
+  company.className = 'detail-company';
+  company.textContent = l.company;
+
+  const meta = document.createElement('div');
+  meta.className = 'detail-meta';
+  const tab = searches.find((s) => s.id === l.search_id)?.label;
+  meta.textContent = [
+    l.location,
+    l.found_at ? `found ${new Date(l.found_at).toLocaleDateString()}` : null,
+    l.applied_at ? `applied ${new Date(l.applied_at).toLocaleDateString()}` : null,
+    tab,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  wrap.append(role, company, meta);
+
+  if (l.fit_score != null) {
+    const fit = document.createElement('div');
+    fit.className = 'detail-fit';
+    const badge = fitBadge(l);
+    if (badge) fit.append(badge);
+    const why = document.createElement('span');
+    why.className = 'detail-fit-why';
+    why.textContent = l.fit_reason ?? '';
+    fit.append(why);
+    wrap.append(fit);
+  }
+
+  // Actions available depend on which view the listing lives in.
+  const actions = document.createElement('div');
+  actions.className = 'detail-actions';
+
+  if (l.url) {
+    actions.append(
+      detailAction('Open posting ↗', 'detail-open', 'Open in your browser', () =>
+        window.api.openUrl(l.url)
+      )
+    );
+  }
+
+  const view = viewOf(l);
+  const after = (patch, call, failMsg) => async () => {
+    Object.assign(l, patch);
+    const target = all.find((x) => x.id === l.id);
+    if (target) Object.assign(target, patch);
+    try {
+      await call();
+      closeDetail();
+    } catch {
+      showError(failMsg);
+    }
+  };
+
+  if (view === 'new') {
+    actions.append(
+      detailAction('👁 Seen', 'seen-btn', 'Reviewed — keep for later',
+        after({ seen: true }, () => window.api.markSeen(l.id), 'Could not mark as seen.'))
+    );
+  }
+  if (view === 'new' || view === 'seen') {
+    actions.append(
+      detailAction('Applied ✓', 'apply-btn', 'Move to In Progress',
+        after(
+          { status: 'applied', applied_at: new Date().toISOString(), seen: true, dismissed_at: null },
+          () => window.api.markApplied(l.id),
+          'Could not mark as applied.'
+        )),
+      detailAction('✕ Dismiss', 'restore-btn', 'Not interested',
+        after({ seen: true, dismissed_at: new Date().toISOString() },
+          () => window.api.dismiss(l.id), 'Could not dismiss.'))
+    );
+  }
+  if (view === 'dismissed') {
+    actions.append(
+      detailAction('↩ Restore', 'restore-btn', 'Move back to Seen',
+        after({ seen: true, dismissed_at: null }, () => window.api.restore(l.id),
+          'Could not restore.'))
+    );
+  }
+
+  const tailorBtn = detailAction('📄 Tailor resume', 'tailor-btn',
+    'Generate a resume tailored to this listing', () => runTailor(l, wrap, tailorBtn));
+  actions.append(tailorBtn);
+  wrap.append(actions);
+
+  // In Progress listings get their status pipeline and notes inline.
+  if (view === 'progress') {
+    const statusRow = document.createElement('div');
+    statusRow.className = 'detail-actions';
+    const status = document.createElement('select');
+    status.className = 'status-select';
+    for (const s of STATUSES) {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s[0].toUpperCase() + s.slice(1);
+      if (l.status === s) opt.selected = true;
+      status.appendChild(opt);
+    }
+    status.addEventListener('change', () => {
+      l.status = status.value;
+      const target = all.find((x) => x.id === l.id);
+      if (target) target.status = status.value;
+      window.api.setStatus(l.id, status.value).catch(() =>
+        showError('Could not update status.')
+      );
+    });
+    statusRow.append(status);
+    wrap.append(statusRow);
+
+    const notes = document.createElement('textarea');
+    notes.className = 'notes-area';
+    notes.placeholder = 'Notes — comp info, contacts, why you’re interested…';
+    notes.value = l.notes ?? '';
+    notes.addEventListener('blur', () => {
+      const text = notes.value.trim();
+      if (text === (l.notes ?? '')) return;
+      l.notes = text || null;
+      window.api.setNotes(l.id, text).catch(() => showError('Could not save notes.'));
+    });
+    wrap.append(notes);
+  }
+
+  const desc = document.createElement('div');
+  desc.className = 'detail-desc';
+  desc.textContent = l.description ?? 'Loading description…';
+  if (!l.description && l.description !== undefined) {
+    desc.textContent = 'No description was captured for this listing.';
+  }
+  wrap.append(desc);
+
+  listEl.append(wrap);
+}
+
+// Tailored resume renders inline in the detail view so it works at widget width.
+async function runTailor(l, wrap, btn) {
+  let out = wrap.querySelector('.detail-tailor');
+  if (!out) {
+    out = document.createElement('div');
+    out.className = 'detail-tailor';
+    wrap.append(out);
+  }
+  out.replaceChildren();
+  const status = document.createElement('div');
+  status.className = 'detail-tailor-status';
+  status.textContent = 'Generating tailored resume… this can take a minute.';
+  out.append(status);
+  btn.disabled = true;
+
+  try {
+    const text = await window.api.tailorResume(l.id);
+    status.remove();
+
+    const body = document.createElement('pre');
+    body.className = 'detail-tailor-body';
+    body.textContent = text;
+
+    const row = document.createElement('div');
+    row.className = 'detail-actions';
+    row.append(
+      detailAction('Copy', 'detail-open', '', async () => {
+        await navigator.clipboard.writeText(text);
+      }),
+      detailAction('Save…', 'detail-open', '', async () => {
+        const name =
+          `resume-${l.company}-${l.role}`
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/(^-|-$)/g, '') + '.md';
+        await window.api.saveText(text, name);
+      })
+    );
+    out.append(row, body);
+  } catch (e) {
+    status.textContent = `Failed: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 const EMPTY_TEXT = {
   new: 'No new listings. The scraper runs every 3 hours.',
   seen: 'Nothing marked seen — use 👁 on a new listing to park it here.',
@@ -391,6 +624,10 @@ const EMPTY_TEXT = {
 };
 
 function renderList() {
+  if (detailListing) {
+    renderDetail(detailListing);
+    return;
+  }
   listEl.replaceChildren();
   const listings = visibleListings();
 
@@ -410,6 +647,13 @@ function renderList() {
 function rerender() {
   renderViews();
   renderTabs();
+  // The detail view (and the profile panel) own the whole body; hide the
+  // chrome that filters a list you're not currently looking at. Checking
+  // profileOpen keeps a background poll from un-hiding it.
+  const chrome = detailListing || profileOpen ? 'none' : '';
+  viewsEl.style.display = chrome;
+  tabsEl.style.display = chrome;
+  document.getElementById('filter-row').style.display = chrome;
   renderList();
 }
 

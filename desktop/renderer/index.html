@@ -266,6 +266,81 @@
     }
     #tailor-copy, #tailor-save { background: #2f8ad6; color: #fff; }
 
+    /* ---- listing detail view ---- */
+    .detail {
+      background: #fff;
+      border-radius: 10px;
+      padding: 14px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .detail-back {
+      border: none;
+      background: none;
+      color: #2f6ea8;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 0 0 8px;
+    }
+    .detail-role { font-size: 16px; font-weight: 700; line-height: 1.25; }
+    .detail-company { font-size: 13px; color: #333; margin-top: 2px; }
+    .detail-meta { font-size: 11px; color: #777; margin-top: 4px; }
+    .detail-fit { display: flex; align-items: flex-start; gap: 6px; margin-top: 10px; }
+    .detail-fit .fit-badge { margin-left: 0; }
+    .detail-fit-why { font-size: 11px; color: #666; line-height: 1.4; }
+    .detail-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 12px;
+    }
+    .detail-actions .apply-btn,
+    .detail-actions .seen-btn,
+    .detail-actions .restore-btn,
+    .detail-actions .tailor-btn { margin-left: 0; }
+    .detail-open {
+      border: none;
+      background: #2f8ad6;
+      color: #fff;
+      font-size: 11px;
+      padding: 5px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+    }
+    .detail-desc {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid #eef1f4;
+      font-size: 12px;
+      color: #444;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      max-height: 340px;
+      overflow-y: auto;
+    }
+    .detail-tailor { margin-top: 12px; border-top: 1px solid #eef1f4; padding-top: 10px; }
+    .detail-tailor-status { font-size: 12px; color: #666; }
+    .detail-tailor-body {
+      margin-top: 8px;
+      background: #f6f7f9;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 11px;
+      font-family: ui-monospace, Consolas, monospace;
+      white-space: pre-wrap;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    /* Detail actions stay visible in the widget even though list-card
+       actions are hidden there — the detail view is the point. */
+    body.widget .detail { padding: 10px; }
+    body.widget .detail-role { font-size: 14px; }
+    body.widget .detail-actions .apply-btn,
+    body.widget .detail-actions .seen-btn,
+    body.widget .detail-actions .restore-btn,
+    body.widget .detail-actions .tailor-btn,
+    body.widget .detail-actions .notes-btn { display: inline-block; }
+    body.widget .detail-desc { max-height: 200px; font-size: 11px; }
+
     /* ---- widget mode: compact, frameless, draggable ---- */
     body.widget { border: 1px solid #d5d9df; border-radius: 10px; overflow: hidden; }
     body.widget header {

@@ -73,6 +73,12 @@ tracking an application), polls Supabase every few minutes in the
 background, and fires a native OS notification when new listings appear.
 Closing the window minimizes to the tray so notifications keep working.
 
+- **Detail view**: clicking a listing opens it in-app rather than launching
+  a browser — full description, fit score with its reasoning, and every
+  action (Open posting, 👁 Seen, Applied ✓, Dismiss, Restore, status
+  pipeline, notes) plus **📄 Tailor resume** rendered inline. This is what
+  makes widget mode usable, since list cards there are too narrow for
+  per-card buttons.
 - **Views**: New (untouched listings) / Seen (reviewed, might apply) /
   In Progress (applications, with status pipeline Applied → Interviewing
   → Offer/Rejected and per-listing notes) / Dismissed (not interested,

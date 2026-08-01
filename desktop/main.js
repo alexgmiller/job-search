@@ -508,6 +508,20 @@ if (!gotLock) {
     ipcMain.handle('set-mode', (_e, mode) => setMode(mode));
     ipcMain.handle('minimize', () => win?.hide());
     ipcMain.handle('get-searches', () => fetchSearches());
+    // Descriptions are up to 6k chars, so they're fetched per listing when
+    // the detail view opens rather than on every poll.
+    ipcMain.handle('get-listing', async (_e, id) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      const { data, error } = await supabase
+        .from('job_listings')
+        .select(
+          'id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason, description'
+        )
+        .eq('id', id)
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    });
     ipcMain.handle('add-search', async (_e, { label, keywords, locations }) => {
       if (!supabase) throw new Error('Supabase not configured');
       const { error } = await supabase
