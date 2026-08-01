@@ -81,15 +81,28 @@ async function fetchListings() {
   return data ?? [];
 }
 
+// PostgREST reports an unknown column as PGRST204 / "column ... does not
+// exist"; used to degrade gracefully when migration-6 hasn't been run.
+function isMissingFieldsColumn(error) {
+  const text = `${error?.code ?? ''} ${error?.message ?? ''}`.toLowerCase();
+  return text.includes('fields') || text.includes('pgrst204');
+}
+
 async function fetchProfile() {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('profile_chunks')
+    .select('id, kind, title, content, fields')
+    .order('created_at', { ascending: true });
+  if (!error) return data ?? [];
+  // Fall back when migration-6 (fields) hasn't run yet; still tolerate
+  // migration-5 being absent entirely.
+  const legacy = await supabase
+    .from('profile_chunks')
     .select('id, kind, title, content')
     .order('created_at', { ascending: true });
-  // Tolerate migration-5 not having run yet.
-  if (error) return [];
-  return data ?? [];
+  if (legacy.error) return [];
+  return (legacy.data ?? []).map((c) => ({ ...c, fields: {} }));
 }
 
 // ---------- resume import ----------
@@ -558,11 +571,17 @@ if (!gotLock) {
       if (error) throw new Error(error.message);
     });
     ipcMain.handle('get-profile', () => fetchProfile());
-    ipcMain.handle('add-chunk', async (_e, { kind, title, content }) => {
+    ipcMain.handle('add-chunk', async (_e, { kind, title, content, fields }) => {
       if (!supabase) throw new Error('Supabase not configured');
-      const { error } = await supabase
+      const base = { kind, title, content };
+      let { error } = await supabase
         .from('profile_chunks')
-        .insert({ kind, title, content });
+        .insert(fields ? { ...base, fields } : base);
+      // Structured fields need migration-6; fall back so the editor still
+      // works (title/content are derived and self-sufficient) without it.
+      if (error && isMissingFieldsColumn(error)) {
+        ({ error } = await supabase.from('profile_chunks').insert(base));
+      }
       if (error) throw new Error(error.message);
       return fetchProfile();
     });
@@ -588,12 +607,16 @@ if (!gotLock) {
       if (error) throw new Error(error.message);
       return fetchProfile();
     });
-    ipcMain.handle('update-chunk', async (_e, { id, kind, title, content }) => {
+    ipcMain.handle('update-chunk', async (_e, { id, kind, title, content, fields }) => {
       if (!supabase) throw new Error('Supabase not configured');
-      const { error } = await supabase
+      const base = { kind, title, content };
+      let { error } = await supabase
         .from('profile_chunks')
-        .update({ kind, title, content })
+        .update(fields ? { ...base, fields } : base)
         .eq('id', id);
+      if (error && isMissingFieldsColumn(error)) {
+        ({ error } = await supabase.from('profile_chunks').update(base).eq('id', id));
+      }
       if (error) throw new Error(error.message);
       return fetchProfile();
     });

@@ -85,7 +85,17 @@ Closing the window minimizes to the tray so notifications keep working.
   only from your profile chunks via Claude Haiku (a few cents per click;
   needs `ANTHROPIC_API_KEY` in `desktop/.env`).
 
-Requires migrations 1–5 in `supabase/` to have been run.
+Profile entries are edited as structured fields (✎ on an entry, or
+double-click its text): job title, company, location, start/end month with
+a **Present** toggle, bullets — and a different field set per kind
+(education, project, certification, skill). The structured values live in
+`profile_chunks.fields`; `title` and `content` are derived from them by
+[shared/profile-fields.js](shared/profile-fields.js), so fit scoring and
+resume tailoring keep reading one consistent text body.
+
+Requires migrations 1–6 in `supabase/` to have been run. (Without
+migration-6 the editor still works — it just can't persist the structured
+fields, only the derived text.)
 
 ```sh
 cd desktop

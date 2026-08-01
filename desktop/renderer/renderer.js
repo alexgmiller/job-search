@@ -622,11 +622,20 @@ function makeChunkRow(c) {
   }
 
   function renderEdit() {
+    const PF = window.ProfileFields;
     div.replaceChildren();
 
-    const row = document.createElement('div');
-    row.className = 'chunk-edit-row';
+    // Working copy of the entry's structured fields. Entries created before
+    // structured fields existed get seeded from their title/content.
+    let working = PF.isEmptyFields(c.fields)
+      ? PF.fieldsFromLegacy(c.kind, c.title, c.content)
+      : { ...c.fields };
 
+    const kindRow = document.createElement('div');
+    kindRow.className = 'chunk-edit-row';
+    const kindLabel = document.createElement('label');
+    kindLabel.className = 'field-label';
+    kindLabel.textContent = 'Type';
     const kindSel = document.createElement('select');
     kindSel.className = 'imp-kind';
     for (const k of KINDS) {
@@ -636,15 +645,72 @@ function makeChunkRow(c) {
       if (k === c.kind) opt.selected = true;
       kindSel.appendChild(opt);
     }
+    const kindWrap = document.createElement('div');
+    kindWrap.className = 'field field-half';
+    kindWrap.append(kindLabel, kindSel);
+    kindRow.append(kindWrap);
 
-    const titleInput = document.createElement('input');
-    titleInput.type = 'text';
-    titleInput.value = c.title;
+    const grid = document.createElement('div');
+    grid.className = 'field-grid';
 
-    row.append(kindSel, titleInput);
+    // Rebuild the field set whenever the kind changes — each kind has its
+    // own shape, and values for shared keys (dates, location) carry over.
+    function buildFields() {
+      grid.replaceChildren();
+      const schema = PF.FIELD_SCHEMAS[kindSel.value] ?? PF.FIELD_SCHEMAS.other;
+      for (const f of schema) {
+        const wrap = document.createElement('div');
+        wrap.className = 'field' + (f.full || f.type === 'textarea' ? '' : ' field-half');
 
-    const contentArea = document.createElement('textarea');
-    contentArea.value = c.content;
+        const label = document.createElement('label');
+        label.className = 'field-label';
+        label.textContent = f.label + (f.required ? ' *' : '');
+        wrap.append(label);
+
+        let input;
+        if (f.type === 'textarea') {
+          input = document.createElement('textarea');
+        } else {
+          input = document.createElement('input');
+          input.type = f.type === 'month' ? 'month' : 'text';
+        }
+        input.value = working[f.key] ?? '';
+        if (f.placeholder) input.placeholder = f.placeholder;
+        input.addEventListener('input', () => {
+          working[f.key] = input.value;
+        });
+        wrap.append(input);
+
+        // "Present" checkbox disables the paired end-date input.
+        if (f.present) {
+          const presentWrap = document.createElement('label');
+          presentWrap.className = 'field-present';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = !!working.present;
+          const sync = () => {
+            working.present = cb.checked;
+            input.disabled = cb.checked;
+            if (cb.checked) input.value = '';
+          };
+          cb.addEventListener('change', sync);
+          presentWrap.append(cb, document.createTextNode(' Present'));
+          wrap.append(presentWrap);
+          sync();
+        }
+
+        if (f.hint) {
+          const hint = document.createElement('div');
+          hint.className = 'field-hint';
+          hint.textContent = f.hint;
+          wrap.append(hint);
+        }
+        grid.append(wrap);
+      }
+    }
+
+    kindSel.addEventListener('change', buildFields);
+    buildFields();
 
     const actions = document.createElement('div');
     actions.className = 'chunk-actions';
@@ -658,18 +724,34 @@ function makeChunkRow(c) {
     save.className = 'chunk-save-btn';
     save.textContent = 'Save';
     save.addEventListener('click', async () => {
-      const title = titleInput.value.trim();
-      const content = contentArea.value.trim();
+      const kind = kindSel.value;
+      const schema = PF.FIELD_SCHEMAS[kind] ?? PF.FIELD_SCHEMAS.other;
+      const missing = schema
+        .filter((f) => f.required && !String(working[f.key] ?? '').trim())
+        .map((f) => f.label);
+      if (missing.length) {
+        showError(`Required: ${missing.join(', ')}`);
+        return;
+      }
+      // title/content are derived so scoring and the resume tailor keep
+      // reading one consistent text body.
+      const title = PF.deriveTitle(kind, working);
+      const content = PF.deriveContent(kind, working);
       if (!title || !content) {
-        showError('A profile entry needs a title and content.');
+        showError('Fill in enough detail for this entry to be useful.');
         return;
       }
       save.disabled = true;
       try {
-        const updated = { id: c.id, kind: kindSel.value, title, content };
-        const fresh = await window.api.updateChunk(updated);
+        const fresh = await window.api.updateChunk({
+          id: c.id,
+          kind,
+          title,
+          content,
+          fields: working,
+        });
         clearError();
-        renderChunks(fresh); // rebuild the list so ordering stays server-truth
+        renderChunks(fresh);
       } catch (e) {
         save.disabled = false;
         showError(`Could not save: ${e.message}`);
@@ -677,8 +759,8 @@ function makeChunkRow(c) {
     });
 
     actions.append(cancel, save);
-    div.append(row, contentArea, actions);
-    titleInput.focus();
+    div.append(kindRow, grid, actions);
+    grid.querySelector('input, textarea')?.focus();
   }
 
   renderRead();
