@@ -197,6 +197,10 @@
     .tab-edit { margin-left: 6px; opacity: 0.85; }
 
     /* ---------------- filters ---------------- */
+    /* Full window shows filters inline; the widget collapses them behind a
+       toggle, since three rows of chips would fill a 470px-tall window
+       before a single listing appeared. */
+    #filter-toggle { display: none; }
     #filter-row { padding: 0 18px 12px; }
     #region-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 7px; }
     .region-chip {
@@ -738,7 +742,28 @@
     body.widget .view { font-size: 10px; padding: 5px 2px; }
     body.widget #tabs { padding: 0 12px 8px; gap: 4px; }
     body.widget .tab { font-size: 10px; padding: 3px 9px; }
-    body.widget #filter-row { padding: 0 12px 8px; }
+    body.widget #filter-toggle {
+      display: block;
+      margin: 0 12px 8px;
+      padding: 4px 10px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-dim);
+      border-radius: var(--radius-sm);
+      font-size: 10.5px;
+      font-weight: 550;
+      text-align: left;
+      width: calc(100% - 24px);
+      transition: background 0.12s, border-color 0.12s;
+    }
+    body.widget #filter-toggle:hover { background: var(--surface-2); border-color: var(--text-mute); }
+    body.widget #filter-toggle.has-filters {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    body.widget #filter-row { padding: 0 12px 8px; display: none; }
+    body.widget #filter-row.open { display: block; }
     body.widget #region-chips { gap: 4px; margin-bottom: 5px; }
     body.widget .region-chip { font-size: 9.5px; padding: 2px 8px; }
     body.widget #loc-filter { font-size: 11px; padding: 5px 9px; }
@@ -774,6 +799,7 @@
   </header>
   <div id="views"></div>
   <div id="tabs"></div>
+  <button id="filter-toggle" type="button">Filters</button>
   <div id="filter-row">
     <div id="region-chips"></div>
     <input id="loc-filter" placeholder="…and/or filter by text (city, state, company)" />

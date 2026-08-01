@@ -663,7 +663,10 @@ function rerender() {
   const chrome = detailListing || profileOpen ? 'none' : '';
   viewsEl.style.display = chrome;
   tabsEl.style.display = chrome;
-  document.getElementById('filter-row').style.display = chrome;
+  // Clearing the inline style (rather than setting 'block') lets the
+  // widget's collapsed-by-default rule keep applying.
+  filterRowEl.style.display = chrome;
+  filterToggleEl.style.display = chrome;
   renderList();
 }
 
@@ -686,6 +689,21 @@ window.api.getSearches().then((s) => {
   rerender();
 });
 
+// In widget mode the filter row is collapsed behind this toggle; the label
+// reports how many filters are active so a hidden filter is never a mystery.
+const filterRowEl = document.getElementById('filter-row');
+const filterToggleEl = document.getElementById('filter-toggle');
+
+function updateFilterToggle() {
+  const count = activeRegions.size + (locationFilter ? 1 : 0);
+  filterToggleEl.textContent = count ? `Filters · ${count} active` : 'Filters';
+  filterToggleEl.classList.toggle('has-filters', count > 0);
+}
+
+filterToggleEl.addEventListener('click', () => {
+  filterRowEl.classList.toggle('open');
+});
+
 // Region filter chips, built from the shared region list.
 const regionChipsEl = document.getElementById('region-chips');
 for (const [key, label] of Object.entries(window.JobLocations.REGION_LABELS)) {
@@ -697,6 +715,7 @@ for (const [key, label] of Object.entries(window.JobLocations.REGION_LABELS)) {
     if (activeRegions.has(key)) activeRegions.delete(key);
     else activeRegions.add(key);
     chip.classList.toggle('on', activeRegions.has(key));
+    updateFilterToggle();
     renderList();
   });
   regionChipsEl.appendChild(chip);
@@ -704,8 +723,11 @@ for (const [key, label] of Object.entries(window.JobLocations.REGION_LABELS)) {
 
 locFilterEl.addEventListener('input', () => {
   locationFilter = locFilterEl.value.trim();
+  updateFilterToggle();
   renderList();
 });
+
+updateFilterToggle();
 
 refreshBtn.addEventListener('click', async () => {
   refreshBtn.disabled = true;
