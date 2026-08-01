@@ -36,6 +36,14 @@ dominate and filler words ("help", "office", "service") count for almost
 nothing. Scores are calibrated against the corpus, so they read as "how
 good is this compared to everything else out there".
 
+Keyword overlap alone can't tell a Staff Engineer role from an entry-level
+one — both use the same technology words — so scores are also weighted by
+seniority (title keywords plus any stated years-of-experience bar). The
+default weights target an early-career candidate; change
+`EARLY_CAREER_WEIGHTS` in [shared/scoring.js](shared/scoring.js), or pass
+`{seniorityWeights}` to `buildScorer`, if you're aiming at senior roles.
+Measured on 679 real listings: junior avg 47, mid 26, senior 17, staff 8.
+
 To score listings that were found before you filled in your profile:
 
 ```sh
