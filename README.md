@@ -27,8 +27,23 @@ Runs every 3 hours via GitHub Actions
 ([.github/workflows/scrape.yml](.github/workflows/scrape.yml)). Repo
 secrets needed: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and
 optionally `RAPIDAPI_KEY` (Indeed/LinkedIn source). New listings are
-fit-scored against `profile_chunks` by keyword overlap — free, no API key;
-skipped silently when the profile is empty.
+fit-scored against `profile_chunks` by [shared/scoring.js](shared/scoring.js) —
+free, no API key; skipped silently when the profile is empty.
+
+Scoring weights each profile term by how *rare* it is across the listings
+being scored, so distinctive skills (servicenow, sccm, "active directory")
+dominate and filler words ("help", "office", "service") count for almost
+nothing. Scores are calibrated against the corpus, so they read as "how
+good is this compared to everything else out there".
+
+To score listings that were found before you filled in your profile:
+
+```sh
+cd scraper
+node backfill-scores.js --dry-run   # preview scores, write nothing
+node backfill-scores.js             # write fit_score / fit_reason
+node backfill-scores.js --all       # re-score everything, not just unscored
+```
 
 Local test (uses `scraper/.env`, see `.env.example` there):
 

@@ -22,6 +22,7 @@ if (fs.existsSync(envPath)) {
 
 const { createClient } = require('@supabase/supabase-js');
 const { matchesLocation, REGION_QUERIES } = require('../shared/locations');
+const { buildScorer } = require('../shared/scoring');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -344,35 +345,15 @@ async function main() {
   if (error) throw new Error(`insert failed: ${error.message}`);
   console.log(`${inserted?.length ?? 0} new listings inserted.`);
 
-  if (inserted?.length) await scoreListings(inserted);
+  if (inserted?.length) await scoreListings(inserted, listings);
 }
 
 // ---------- keyword fit scoring (free, no API) ----------
-// Score = share of the profile's distinctive terms that appear in the job
-// text. Coarser than an LLM (can't judge seniority), but free and good
-// enough for relative ranking; badges are best read relative to each other.
+// Scoring lives in shared/scoring.js: profile terms weighted by how rare
+// they are across the fetched corpus, so distinctive skills dominate and
+// filler words ("help", "office", "service") count for almost nothing.
 
-const STOPWORDS = new Set(
-  ('the and for with you your our are will this that have has can from not ' +
-   'all any been being able about into over under more most other some such ' +
-   'than then them they their there these those what when where which while ' +
-   'who whom why how each every both few very via per etc a an of in on at ' +
-   'to by is it as be we or if do does did its was were also may might must ' +
-   'should would could us new job work team role company experience years ' +
-   'ability strong plus bonus required requirements responsibilities skills ' +
-   'including preferred qualifications benefits salary equal opportunity').split(' ')
-);
-
-function terms(text) {
-  const out = new Set();
-  for (const m of (text ?? '').toLowerCase().matchAll(/[a-z][a-z0-9+#.]{2,}/g)) {
-    const t = m[0].replace(/\.+$/, '');
-    if (t.length >= 3 && !STOPWORDS.has(t)) out.add(t);
-  }
-  return out;
-}
-
-async function scoreListings(listings) {
+async function scoreListings(inserted, corpus) {
   const { data: chunks, error } = await supabase
     .from('profile_chunks')
     .select('kind, title, content');
@@ -381,26 +362,25 @@ async function scoreListings(listings) {
     return;
   }
 
-  const profileTerms = terms(chunks.map((c) => `${c.title} ${c.content}`).join(' '));
-  if (!profileTerms.size) return;
+  // Score against every listing fetched this run, not just the new ones —
+  // a bigger corpus makes the rarity weighting far more meaningful.
+  const score = buildScorer(chunks, corpus);
+  if (!score) {
+    console.log('Profile has no usable terms — skipping fit scoring.');
+    return;
+  }
 
   let scored = 0;
-  for (const l of listings) {
-    const jobTerms = terms(`${l.role} ${l.description ?? ''}`);
-    const matched = [...profileTerms].filter((t) => jobTerms.has(t));
-    const score = Math.min(100, Math.round((100 * matched.length) / profileTerms.size));
-    const top = matched.slice(0, 8).join(', ');
-    const reason = matched.length
-      ? `Keyword match: ${matched.length} profile terms found (${top})`
-      : 'No profile terms found in this listing';
+  for (const l of inserted) {
+    const { score: value, reason } = score(l);
     const { error: uErr } = await supabase
       .from('job_listings')
-      .update({ fit_score: score, fit_reason: reason })
+      .update({ fit_score: value, fit_reason: reason })
       .eq('id', l.id);
     if (uErr) console.warn(`scoring "${l.role}" failed: ${uErr.message}`);
     else scored++;
   }
-  console.log(`${scored}/${listings.length} new listings keyword-scored.`);
+  console.log(`${scored}/${inserted.length} new listings fit-scored.`);
 }
 
 main().catch((e) => {
