@@ -588,6 +588,15 @@ if (!gotLock) {
       if (error) throw new Error(error.message);
       return fetchProfile();
     });
+    ipcMain.handle('update-chunk', async (_e, { id, kind, title, content }) => {
+      if (!supabase) throw new Error('Supabase not configured');
+      const { error } = await supabase
+        .from('profile_chunks')
+        .update({ kind, title, content })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+      return fetchProfile();
+    });
     ipcMain.handle('delete-chunk', async (_e, id) => {
       if (!supabase) throw new Error('Supabase not configured');
       const { error } = await supabase.from('profile_chunks').delete().eq('id', id);

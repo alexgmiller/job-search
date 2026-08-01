@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('api', {
   addChunk: (chunk) => ipcRenderer.invoke('add-chunk', chunk),
   importResume: () => ipcRenderer.invoke('import-resume'),
   addChunks: (chunks) => ipcRenderer.invoke('add-chunks', chunks),
+  updateChunk: (chunk) => ipcRenderer.invoke('update-chunk', chunk),
   deleteChunk: (id) => ipcRenderer.invoke('delete-chunk', id),
   tailorResume: (id) => ipcRenderer.invoke('tailor-resume', id),
   saveText: (content, defaultName) =>

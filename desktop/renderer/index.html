@@ -62,6 +62,40 @@
     }
     .chunk-title { font-size: 13px; font-weight: 600; flex: 1; }
     .chunk-content { font-size: 12px; color: #444; margin-top: 6px; white-space: pre-wrap; }
+    .chunk-edit {
+      border: none;
+      background: #eef2f7;
+      color: #556;
+      width: 26px;
+      height: 26px;
+      border-radius: 13px;
+      cursor: pointer;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+    .chunk-edit:hover { background: #e0e7f0; }
+    .chunk-edit-row { display: flex; gap: 6px; margin-bottom: 6px; }
+    .chunk select, .chunk input[type="text"], .chunk textarea {
+      padding: 5px 7px;
+      border: 1px solid #d5d9df;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: inherit;
+      background: #fff;
+    }
+    .chunk input[type="text"] { flex: 1; min-width: 0; }
+    .chunk textarea { width: 100%; min-height: 90px; resize: vertical; }
+    .chunk-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+    .chunk-actions button {
+      border: none;
+      border-radius: 6px;
+      padding: 5px 14px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .chunk-cancel { background: #eee; color: #444; }
+    .chunk-save-btn { background: #2f8ad6; color: #fff; }
+    .chunk-save-btn:disabled { opacity: 0.6; cursor: default; }
     #chunk-form { background: #fff; border-radius: 10px; padding: 12px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
     #chunk-form select, #chunk-form input, #chunk-form textarea {
       width: 100%;

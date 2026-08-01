@@ -568,9 +568,16 @@ function renderChunks(chunks) {
     chunkListEl.appendChild(empty);
     return;
   }
-  for (const c of chunks) {
-    const div = document.createElement('div');
-    div.className = 'chunk';
+  for (const c of chunks) chunkListEl.appendChild(makeChunkRow(c));
+}
+
+// A chunk renders read-only until you hit ✎, then swaps to inline fields.
+function makeChunkRow(c) {
+  const div = document.createElement('div');
+  div.className = 'chunk';
+
+  function renderRead() {
+    div.replaceChildren();
 
     const head = document.createElement('div');
     head.className = 'chunk-head';
@@ -583,10 +590,16 @@ function renderChunks(chunks) {
     title.className = 'chunk-title';
     title.textContent = c.title;
 
+    const edit = document.createElement('button');
+    edit.className = 'chunk-edit';
+    edit.textContent = '✎';
+    edit.title = 'Edit this entry';
+    edit.addEventListener('click', renderEdit);
+
     const del = document.createElement('button');
     del.className = 'dismiss';
     del.textContent = '✕';
-    del.title = 'Delete this chunk';
+    del.title = 'Delete this entry';
     del.addEventListener('click', async () => {
       if (!confirm(`Delete "${c.title}" from your profile?`)) return;
       try {
@@ -596,15 +609,80 @@ function renderChunks(chunks) {
       }
     });
 
-    head.append(kind, title, del);
+    head.append(kind, title, edit, del);
 
     const content = document.createElement('div');
     content.className = 'chunk-content';
     content.textContent = c.content;
+    // Double-clicking the text is a second, more discoverable way in.
+    content.title = 'Double-click to edit';
+    content.addEventListener('dblclick', renderEdit);
 
     div.append(head, content);
-    chunkListEl.appendChild(div);
   }
+
+  function renderEdit() {
+    div.replaceChildren();
+
+    const row = document.createElement('div');
+    row.className = 'chunk-edit-row';
+
+    const kindSel = document.createElement('select');
+    kindSel.className = 'imp-kind';
+    for (const k of KINDS) {
+      const opt = document.createElement('option');
+      opt.value = k;
+      opt.textContent = k;
+      if (k === c.kind) opt.selected = true;
+      kindSel.appendChild(opt);
+    }
+
+    const titleInput = document.createElement('input');
+    titleInput.type = 'text';
+    titleInput.value = c.title;
+
+    row.append(kindSel, titleInput);
+
+    const contentArea = document.createElement('textarea');
+    contentArea.value = c.content;
+
+    const actions = document.createElement('div');
+    actions.className = 'chunk-actions';
+
+    const cancel = document.createElement('button');
+    cancel.className = 'chunk-cancel';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', renderRead);
+
+    const save = document.createElement('button');
+    save.className = 'chunk-save-btn';
+    save.textContent = 'Save';
+    save.addEventListener('click', async () => {
+      const title = titleInput.value.trim();
+      const content = contentArea.value.trim();
+      if (!title || !content) {
+        showError('A profile entry needs a title and content.');
+        return;
+      }
+      save.disabled = true;
+      try {
+        const updated = { id: c.id, kind: kindSel.value, title, content };
+        const fresh = await window.api.updateChunk(updated);
+        clearError();
+        renderChunks(fresh); // rebuild the list so ordering stays server-truth
+      } catch (e) {
+        save.disabled = false;
+        showError(`Could not save: ${e.message}`);
+      }
+    });
+
+    actions.append(cancel, save);
+    div.append(row, contentArea, actions);
+    titleInput.focus();
+  }
+
+  renderRead();
+  return div;
 }
 
 function setProfileOpen(open) {
