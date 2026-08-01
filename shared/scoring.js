@@ -138,12 +138,28 @@ function buildScorer(profileChunks, corpus, options = {}) {
   }
   if (total <= 0) return null;
 
+  // Sources differ wildly in how much text they return — a Greenhouse post
+  // carries ~6k characters while an Adzuna snippet carries a few hundred.
+  // Without length normalisation the verbose source always wins, because a
+  // longer document trips more profile terms regardless of actual fit. This
+  // is the BM25 length-normalisation term (b=0.75), applied with tf=1 since
+  // we only track term presence.
+  const B = 0.75;
+  const K1 = 1.2;
+  const avgLen =
+    docs.length > 0
+      ? docs.reduce((sum, d) => sum + Math.max(d.size, 1), 0) / docs.length
+      : 1;
+
   function rawHit(jobTerms) {
+    const len = Math.max(jobTerms.size, 1);
+    const norm = (K1 + 1) / (1 + K1 * (1 - B + (B * len) / avgLen));
     let hit = 0;
     const matched = [];
     for (const t of profileTerms) {
       if (jobTerms.has(t)) {
-        hit += weight.get(t);
+        const w = weight.get(t) * norm;
+        hit += w;
         matched.push([t, weight.get(t)]);
       }
     }

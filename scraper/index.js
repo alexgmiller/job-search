@@ -345,7 +345,7 @@ async function main() {
   if (error) throw new Error(`insert failed: ${error.message}`);
   console.log(`${inserted?.length ?? 0} new listings inserted.`);
 
-  if (inserted?.length) await scoreListings(inserted, listings);
+  if (inserted?.length) await scoreListings(inserted);
 }
 
 // ---------- keyword fit scoring (free, no API) ----------
@@ -353,7 +353,7 @@ async function main() {
 // they are across the fetched corpus, so distinctive skills dominate and
 // filler words ("help", "office", "service") count for almost nothing.
 
-async function scoreListings(inserted, corpus) {
+async function scoreListings(inserted) {
   const { data: chunks, error } = await supabase
     .from('profile_chunks')
     .select('kind, title, content');
@@ -362,8 +362,22 @@ async function scoreListings(inserted, corpus) {
     return;
   }
 
-  // Score against every listing fetched this run, not just the new ones —
-  // a bigger corpus makes the rarity weighting far more meaningful.
+  // Calibrate against everything already stored, not against this run's
+  // fetched batch. Using a per-run corpus made scores incomparable between
+  // runs — a listing found today could outrank a better one found yesterday
+  // purely because its batch was weaker.
+  const corpus = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error: cErr } = await supabase
+      .from('job_listings')
+      .select('role, description')
+      .range(from, from + 999);
+    if (cErr) break;
+    corpus.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  console.log(`Scoring against ${corpus.length} stored listings.`);
+
   const score = buildScorer(chunks, corpus);
   if (!score) {
     console.log('Profile has no usable terms — skipping fit scoring.');
