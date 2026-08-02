@@ -52,7 +52,8 @@ async function fetchAllListings({ unscoredOnly }) {
   for (let from = 0; ; from += PAGE) {
     let q = supabase
       .from('job_listings')
-      .select('id, company, role, description, fit_score')
+      // `location` is required — the scorer grades location fit from it.
+      .select('id, company, role, location, description, fit_score')
       .order('found_at', { ascending: false })
       .range(from, from + PAGE - 1);
     if (unscoredOnly) q = q.is('fit_score', null);

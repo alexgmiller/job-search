@@ -37,8 +37,11 @@ function terms(text) {
     if (i + 1 < words.length) {
       const a = words[i];
       const b = words[i + 1];
-      // Keep a bigram when at least one half is meaningful.
-      if (a.length >= 2 && b.length >= 2 && !(STOPWORDS.has(a) && STOPWORDS.has(b))) {
+      // Both halves must be meaningful. Allowing one stopword half produced
+      // noise like "java and" / "aimed at", which scored *and* surfaced as
+      // "matched terms" in the UI; real skills ("active directory", "help
+      // desk", "service desk") have two content words.
+      if (a.length >= 3 && b.length >= 3 && !STOPWORDS.has(a) && !STOPWORDS.has(b)) {
         out.add(`${a} ${b}`);
       }
     }
