@@ -37,19 +37,21 @@ const ENV_PATHS = [
   path.join(__dirname, '.env'),
 ];
 let loadedEnvFrom = null;
-for (const p of ENV_PATHS) {
-  if (!fs.existsSync(p)) continue;
-  for (const line of fs.readFileSync(p, 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2];
+
+function loadEnvFiles() {
+  for (const p of ENV_PATHS) {
+    if (!fs.existsSync(p)) continue;
+    for (const line of fs.readFileSync(p, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+      if (m && !(m[1] in process.env)) process.env[m[1]] = m[2];
+    }
+    loadedEnvFrom = loadedEnvFrom ?? p;
   }
-  loadedEnvFrom = loadedEnvFrom ?? p;
 }
+loadEnvFiles();
 
 const { createClient } = require('@supabase/supabase-js');
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 // .env supplies the default; the settings screen can override it per-user.
 const ENV_POLL_MINUTES = Math.max(1, Number(process.env.POLL_MINUTES) || 5);
 
@@ -84,12 +86,24 @@ function schedulePoll() {
   pollTimer = setInterval(poll, getSettings().pollMinutes * 60 * 1000);
 }
 
-const supabase =
-  SUPABASE_URL && SUPABASE_ANON_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      })
-    : null;
+// Lazily constructed and retried: the first launch after an install has
+// occasionally started with an environment where the initial config read
+// misfired, and a client built once at module load stayed null until the
+// app was relaunched. getSupabase re-reads the env files on each attempt
+// until construction succeeds.
+let supabaseClient = null;
+
+function getSupabase() {
+  if (supabaseClient) return supabaseClient;
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) loadEnvFiles();
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
+  supabaseClient = createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return supabaseClient;
+}
 
 let win = null;
 let tray = null;
@@ -149,7 +163,7 @@ const knownIds = new Set();
 let firstPoll = true;
 
 async function fetchListings() {
-  if (!supabase) {
+  if (!getSupabase()) {
     // Name the exact file to create — "copy .env.example" is useless advice
     // inside an installed build, where there is no checkout to copy from.
     throw new Error(
@@ -158,7 +172,7 @@ async function fetchListings() {
   }
   // Everything the four views need in one query; the renderer splits it.
   // Newest 500 keeps the payload bounded once dismissed rows pile up.
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('job_listings')
     .select('id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason, fit_parts')
     .order('found_at', { ascending: false })
@@ -175,15 +189,15 @@ function isMissingFieldsColumn(error) {
 }
 
 async function fetchProfile() {
-  if (!supabase) return [];
-  const { data, error } = await supabase
+  if (!getSupabase()) return [];
+  const { data, error } = await getSupabase()
     .from('profile_chunks')
     .select('id, kind, title, content, fields')
     .order('created_at', { ascending: true });
   if (!error) return data ?? [];
   // Fall back when migration-6 (fields) hasn't run yet; still tolerate
   // migration-5 being absent entirely.
-  const legacy = await supabase
+  const legacy = await getSupabase()
     .from('profile_chunks')
     .select('id, kind, title, content')
     .order('created_at', { ascending: true });
@@ -358,10 +372,10 @@ async function tailorResume(listingId) {
       'No ANTHROPIC_API_KEY in desktop/.env — get one at console.anthropic.com and restart the app.'
     );
   }
-  if (!supabase) throw new Error('Supabase not configured');
+  if (!getSupabase()) throw new Error('Supabase not configured');
 
   const [{ data: listing, error: lErr }, chunks] = await Promise.all([
-    supabase
+    getSupabase()
       .from('job_listings')
       .select('company, role, location, description')
       .eq('id', listingId)
@@ -409,8 +423,8 @@ async function tailorResume(listingId) {
 }
 
 async function fetchSearches() {
-  if (!supabase) return [];
-  const { data, error } = await supabase
+  if (!getSupabase()) return [];
+  const { data, error } = await getSupabase()
     .from('searches')
     .select('id, label')
     .eq('enabled', true)
@@ -718,8 +732,8 @@ if (!gotLock) {
     // Descriptions are up to 6k chars, so they're fetched per listing when
     // the detail view opens rather than on every poll.
     ipcMain.handle('get-listing', async (_e, id) => {
-      if (!supabase) throw new Error('Supabase not configured');
-      const { data, error } = await supabase
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const { data, error } = await getSupabase()
         .from('job_listings')
         .select(
           'id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason, fit_parts, description'
@@ -730,16 +744,16 @@ if (!gotLock) {
       return data;
     });
     ipcMain.handle('add-search', async (_e, { label, keywords, locations }) => {
-      if (!supabase) throw new Error('Supabase not configured');
-      const { error } = await supabase
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const { error } = await getSupabase()
         .from('searches')
         .insert({ label, keywords, locations });
       if (error) throw new Error(error.message);
       return fetchSearches();
     });
     ipcMain.handle('update-search', async (_e, { id, label, keywords, locations }) => {
-      if (!supabase) throw new Error('Supabase not configured');
-      const { error } = await supabase
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const { error } = await getSupabase()
         .from('searches')
         .update({ label, keywords, locations })
         .eq('id', id);
@@ -747,15 +761,15 @@ if (!gotLock) {
       return fetchSearches();
     });
     ipcMain.handle('delete-search', async (_e, id) => {
-      if (!supabase) throw new Error('Supabase not configured');
-      const { error } = await supabase.from('searches').delete().eq('id', id);
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const { error } = await getSupabase().from('searches').delete().eq('id', id);
       if (error) throw new Error(error.message);
       return fetchSearches();
     });
     ipcMain.handle('mark-applied', async (_e, id) => {
-      if (!supabase) throw new Error('Supabase not configured');
+      if (!getSupabase()) throw new Error('Supabase not configured');
       // Applying moves the row to In Progress regardless of where it was.
-      const { error } = await supabase
+      const { error } = await getSupabase()
         .from('job_listings')
         .update({
           status: 'applied',
@@ -767,25 +781,25 @@ if (!gotLock) {
       if (error) throw new Error(error.message);
     });
     ipcMain.handle('dismiss', async (_e, id) => {
-      if (!supabase) throw new Error('Supabase not configured');
-      const { error } = await supabase
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const { error } = await getSupabase()
         .from('job_listings')
         .update({ seen: true, dismissed_at: new Date().toISOString() })
         .eq('id', id);
       if (error) throw new Error(error.message);
     });
     ipcMain.handle('restore', async (_e, id) => {
-      if (!supabase) throw new Error('Supabase not configured');
+      if (!getSupabase()) throw new Error('Supabase not configured');
       // Restored rows land in Seen, not New — you've clearly looked at them.
-      const { error } = await supabase
+      const { error } = await getSupabase()
         .from('job_listings')
         .update({ seen: true, dismissed_at: null })
         .eq('id', id);
       if (error) throw new Error(error.message);
     });
     ipcMain.handle('set-status', async (_e, { id, status }) => {
-      if (!supabase) throw new Error('Supabase not configured');
-      const { error } = await supabase
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const { error } = await getSupabase()
         .from('job_listings')
         .update({ status })
         .eq('id', id);
@@ -793,15 +807,15 @@ if (!gotLock) {
     });
     ipcMain.handle('get-profile', () => fetchProfile());
     ipcMain.handle('add-chunk', async (_e, { kind, title, content, fields }) => {
-      if (!supabase) throw new Error('Supabase not configured');
+      if (!getSupabase()) throw new Error('Supabase not configured');
       const base = { kind, title, content };
-      let { error } = await supabase
+      let { error } = await getSupabase()
         .from('profile_chunks')
         .insert(fields ? { ...base, fields } : base);
       // Structured fields need migration-6; fall back so the editor still
       // works (title/content are derived and self-sufficient) without it.
       if (error && isMissingFieldsColumn(error)) {
-        ({ error } = await supabase.from('profile_chunks').insert(base));
+        ({ error } = await getSupabase().from('profile_chunks').insert(base));
       }
       if (error) throw new Error(error.message);
       return fetchProfile();
@@ -820,30 +834,30 @@ if (!gotLock) {
       return { ...result, fileName: path.basename(filePaths[0]) };
     });
     ipcMain.handle('add-chunks', async (_e, chunks) => {
-      if (!supabase) throw new Error('Supabase not configured');
+      if (!getSupabase()) throw new Error('Supabase not configured');
       if (!chunks?.length) return fetchProfile();
-      const { error } = await supabase.from('profile_chunks').insert(
+      const { error } = await getSupabase().from('profile_chunks').insert(
         chunks.map(({ kind, title, content }) => ({ kind, title, content }))
       );
       if (error) throw new Error(error.message);
       return fetchProfile();
     });
     ipcMain.handle('update-chunk', async (_e, { id, kind, title, content, fields }) => {
-      if (!supabase) throw new Error('Supabase not configured');
+      if (!getSupabase()) throw new Error('Supabase not configured');
       const base = { kind, title, content };
-      let { error } = await supabase
+      let { error } = await getSupabase()
         .from('profile_chunks')
         .update(fields ? { ...base, fields } : base)
         .eq('id', id);
       if (error && isMissingFieldsColumn(error)) {
-        ({ error } = await supabase.from('profile_chunks').update(base).eq('id', id));
+        ({ error } = await getSupabase().from('profile_chunks').update(base).eq('id', id));
       }
       if (error) throw new Error(error.message);
       return fetchProfile();
     });
     ipcMain.handle('delete-chunk', async (_e, id) => {
-      if (!supabase) throw new Error('Supabase not configured');
-      const { error } = await supabase.from('profile_chunks').delete().eq('id', id);
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const { error } = await getSupabase().from('profile_chunks').delete().eq('id', id);
       if (error) throw new Error(error.message);
       return fetchProfile();
     });
@@ -858,16 +872,16 @@ if (!gotLock) {
       return filePath;
     });
     ipcMain.handle('set-notes', async (_e, { id, notes }) => {
-      if (!supabase) throw new Error('Supabase not configured');
-      const { error } = await supabase
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const { error } = await getSupabase()
         .from('job_listings')
         .update({ notes: notes || null })
         .eq('id', id);
       if (error) throw new Error(error.message);
     });
     ipcMain.handle('mark-seen', async (_e, id) => {
-      if (!supabase) throw new Error('Supabase not configured');
-      const { error } = await supabase
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const { error } = await getSupabase()
         .from('job_listings')
         .update({ seen: true })
         .eq('id', id);
