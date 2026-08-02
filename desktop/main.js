@@ -25,7 +25,17 @@ app.setName(APP_NAME);
 //   2. __dirname/.env — the dev checkout
 // The first file that exists wins; later files don't override values that
 // are already set.
-const ENV_PATHS = [path.join(app.getPath('userData'), '.env'), path.join(__dirname, '.env')];
+// Built from appData (plain %APPDATA%) plus the app name rather than from
+// getPath('userData'): in a packaged build that can still resolve to the
+// default "Electron" folder at module-load time, which sent the installed
+// app looking for its config in the wrong directory.
+const CONFIG_DIR = path.join(app.getPath('appData'), APP_NAME);
+
+const ENV_PATHS = [
+  path.join(CONFIG_DIR, '.env'),
+  path.join(app.getPath('userData'), '.env'),
+  path.join(__dirname, '.env'),
+];
 let loadedEnvFrom = null;
 for (const p of ENV_PATHS) {
   if (!fs.existsSync(p)) continue;
@@ -85,8 +95,10 @@ let win = null;
 let tray = null;
 let quitting = false;
 
-// Window mode + widget geometry persist across restarts.
-const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+// Window mode, geometry and preferences persist across restarts. Kept in
+// CONFIG_DIR for the same reason as .env, so the dev and installed builds
+// genuinely share one location.
+const settingsPath = path.join(CONFIG_DIR, 'settings.json');
 
 function loadSettings() {
   try {
@@ -99,6 +111,7 @@ function loadSettings() {
 function saveSettings(patch) {
   const next = { ...loadSettings(), ...patch };
   try {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(next, null, 2));
   } catch {
     // Settings are a convenience; a failed write shouldn't break the app.
@@ -137,7 +150,11 @@ let firstPoll = true;
 
 async function fetchListings() {
   if (!supabase) {
-    throw new Error('Missing SUPABASE_URL / SUPABASE_ANON_KEY — copy .env.example to .env.');
+    // Name the exact file to create — "copy .env.example" is useless advice
+    // inside an installed build, where there is no checkout to copy from.
+    throw new Error(
+      `Missing SUPABASE_URL / SUPABASE_ANON_KEY. Create ${path.join(CONFIG_DIR, '.env')}`
+    );
   }
   // Everything the four views need in one query; the renderer splits it.
   // Newest 500 keeps the payload bounded once dismissed rows pile up.
