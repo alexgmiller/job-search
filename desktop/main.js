@@ -18,13 +18,22 @@ const SMOKE_TEST = process.argv.includes('--smoke-test');
 const APP_NAME = 'Shortlist';
 app.setName(APP_NAME);
 
-// Tiny .env loader — the only config is the Supabase URL/key and poll interval.
-const envPath = path.join(__dirname, '.env');
-if (fs.existsSync(envPath)) {
-  for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+// Tiny .env loader — the only config is the Supabase URL/key and poll
+// interval. Checked in order:
+//   1. userData/.env  — where a packaged install keeps its config, since
+//      app.asar is read-only and shouldn't carry secrets
+//   2. __dirname/.env — the dev checkout
+// The first file that exists wins; later files don't override values that
+// are already set.
+const ENV_PATHS = [path.join(app.getPath('userData'), '.env'), path.join(__dirname, '.env')];
+let loadedEnvFrom = null;
+for (const p of ENV_PATHS) {
+  if (!fs.existsSync(p)) continue;
+  for (const line of fs.readFileSync(p, 'utf8').split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
     if (m && !(m[1] in process.env)) process.env[m[1]] = m[2];
   }
+  loadedEnvFrom = loadedEnvFrom ?? p;
 }
 
 const { createClient } = require('@supabase/supabase-js');

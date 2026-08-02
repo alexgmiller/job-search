@@ -4,7 +4,9 @@
   "description": "Shortlist — ranks scraped job listings by fit and tracks applications",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --win --publish never",
+    "icons": "electron build/make-icons.js"
   },
   "private": true,
   "dependencies": {
@@ -14,7 +16,52 @@
     "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
-    "electron": "^38.0.0"
+    "electron": "^38.0.0",
+    "electron-builder": "^26.15.3"
   },
-  "productName": "Shortlist"
+  "productName": "Shortlist",
+  "build": {
+    "appId": "com.alexgmiller.shortlist",
+    "productName": "Shortlist",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "build/icon-*.png",
+      "!**/*.map",
+      "!.env*"
+    ],
+    "extraMetadata": {
+      "main": "main.js"
+    },
+    "extraResources": [
+      {
+        "from": "../shared",
+        "to": "shared"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Shortlist"
+    }
+  }
 }
