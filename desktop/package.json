@@ -1,7 +1,7 @@
 {
-  "name": "job-search-desktop",
+  "name": "shortlist",
   "version": "1.0.0",
-  "description": "Desktop companion for the job-listing Supabase table: unseen list + native notifications",
+  "description": "Shortlist — ranks scraped job listings by fit and tracks applications",
   "main": "main.js",
   "scripts": {
     "start": "electron ."
@@ -15,5 +15,6 @@
   },
   "devDependencies": {
     "electron": "^38.0.0"
-  }
+  },
+  "productName": "Shortlist"
 }

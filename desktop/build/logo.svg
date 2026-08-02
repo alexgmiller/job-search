@@ -1,0 +1,12 @@
+<!-- Shortlist mark.
+     Three flush-left bars of decreasing length: the skills / seniority /
+     location score breakdown that the whole app is built around, which also
+     reads as a ranked list. Modernist: flat, zero radius, single accent.
+     Transparent ground so it sits on any taskbar or desktop. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <g fill="#ec3013">
+    <rect x="40" y="36"  width="176" height="40" />
+    <rect x="40" y="108" width="132" height="40" />
+    <rect x="40" y="180" width="88"  height="40" />
+  </g>
+</svg>

@@ -15,6 +15,9 @@ const path = require('path');
 
 const SMOKE_TEST = process.argv.includes('--smoke-test');
 
+const APP_NAME = 'Shortlist';
+app.setName(APP_NAME);
+
 // Tiny .env loader — the only config is the Supabase URL/key and poll interval.
 const envPath = path.join(__dirname, '.env');
 if (fs.existsSync(envPath)) {
@@ -381,17 +384,18 @@ async function poll() {
   }
 }
 
+// build/ holds the generated marks; regenerate with `npx electron
+// build/make-icons.js` after editing build/logo.svg.
+const iconPath = (size) => path.join(__dirname, 'build', `icon-${size}.png`);
+
 function trayIcon() {
-  // 16x16 solid blue square built in memory (BGRA) — avoids shipping an asset.
-  const size = 16;
-  const buf = Buffer.alloc(size * size * 4);
-  for (let i = 0; i < size * size; i++) {
-    buf[i * 4] = 0xd6; // B
-    buf[i * 4 + 1] = 0x8a; // G
-    buf[i * 4 + 2] = 0x2f; // R
-    buf[i * 4 + 3] = 0xff; // A
-  }
-  return nativeImage.createFromBitmap(buf, { width: size, height: size });
+  const img = nativeImage.createFromPath(iconPath(16));
+  return img.isEmpty() ? nativeImage.createEmpty() : img;
+}
+
+function appIcon() {
+  const img = nativeImage.createFromPath(iconPath(256));
+  return img.isEmpty() ? undefined : img;
 }
 
 function showWindow() {
@@ -410,6 +414,8 @@ function createWindow(mode = loadSettings().mode ?? 'full') {
     x: widget ? saved?.x : undefined,
     y: widget ? saved?.y : undefined,
     show: false,
+    title: APP_NAME,
+    icon: appIcon(),
     // Match the stylesheet's --bg so the window doesn't flash white before
     // the page paints (very visible in dark mode).
     backgroundColor: windowBg(),
@@ -525,7 +531,7 @@ if (!gotLock) {
     createWindow();
 
     tray = new Tray(trayIcon());
-    tray.setToolTip('Job Search');
+    tray.setToolTip(APP_NAME);
     buildTrayMenu();
     tray.on('click', showWindow);
 
