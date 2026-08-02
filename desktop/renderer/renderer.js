@@ -38,6 +38,7 @@ const state = {
   activeRegions: new Set(),
   editingSearchId: null,
   theme: 'system',
+  settings: { accent: 'red', theme: 'system', notifications: true, pollMinutes: 5, openAtLogin: false },
   importResult: null, // { fileName, method, rows: [{kind,title,content,on}] }
   tailor: null, // { listing, step, text, error }
   error: '',
@@ -61,7 +62,33 @@ const ICON_PATHS = {
   sun: [['circle', { cx: 12, cy: 12, r: 4 }], ['path', { d: 'M12 2v2' }], ['path', { d: 'M12 20v2' }], ['path', { d: 'm4.93 4.93 1.41 1.41' }], ['path', { d: 'm17.66 17.66 1.41 1.41' }], ['path', { d: 'M2 12h2' }], ['path', { d: 'M20 12h2' }], ['path', { d: 'm6.34 17.66-1.41 1.41' }], ['path', { d: 'm19.07 4.93-1.41 1.41' }]],
   moon: [['path', { d: 'M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z' }]],
   monitor: [['rect', { x: 2, y: 3, width: 20, height: 14, rx: 2 }], ['path', { d: 'M8 21h8' }], ['path', { d: 'M12 17v4' }]],
+  sliders: [['path', { d: 'M20 7h-9' }], ['path', { d: 'M14 17H5' }], ['circle', { cx: 17, cy: 17, r: 3 }], ['circle', { cx: 7, cy: 7, r: 3 }]],
 };
+
+// Accent options. Each has a light and dark pair — [--acc, --acc7] — because
+// the same hue needs different weight on a light vs dark ground.
+const ACCENTS = {
+  red:    { label: 'Red',    light: ['#ec3013', '#ae1800'], dark: ['#ff563c', '#ff9783'] },
+  amber:  { label: 'Amber',  light: ['#b26a00', '#7d4a00'], dark: ['#e0a03a', '#f0c98a'] },
+  green:  { label: 'Green',  light: ['#127a45', '#0b5330'], dark: ['#3fbf7f', '#8ad9b0'] },
+  teal:   { label: 'Teal',   light: ['#0f6f78', '#084a51'], dark: ['#3fbecb', '#8adbe4'] },
+  blue:   { label: 'Blue',   light: ['#1d5fd0', '#123f8f'], dark: ['#5b95ea', '#9dbdf5'] },
+  violet: { label: 'Violet', light: ['#6b3fc4', '#4a2a8a'], dark: ['#9b7ae8', '#c3adf3'] },
+  slate:  { label: 'Slate',  light: ['#3f4a5a', '#28303c'], dark: ['#8fa1bb', '#b9c6d8'] },
+};
+
+const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
+
+// Accent lives in CSS custom properties on :root, so every rule that already
+// references var(--acc) picks it up with no further plumbing.
+function applyAccent() {
+  const a = ACCENTS[state.settings.accent] ?? ACCENTS.red;
+  const [acc, acc7] = prefersDark.matches ? a.dark : a.light;
+  document.documentElement.style.setProperty('--acc', acc);
+  document.documentElement.style.setProperty('--acc7', acc7);
+}
+// Re-apply when the effective scheme flips (OS change, or our theme toggle).
+prefersDark.addEventListener('change', applyAccent);
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function icon(name, size = 11) {
@@ -336,9 +363,15 @@ function screenList() {
     btn('', 'btn', { iconName: 'ext', title: 'Full window', onClick: () => window.api.setMode('full') }),
     btn('', 'btn', { iconName: 'x', title: 'Hide to tray', onClick: () => window.api.minimize() })
   );
+  const settingsBtn = btn('', 'btn', {
+    iconName: 'sliders',
+    title: 'Settings',
+    onClick: () => window.api.getSettings().then((s) => go('settings', { settings: s })),
+  });
+
   const chrome = el('div', 'hdr-actions');
   chrome.id = 'chrome-btns';
-  chrome.append(themeBtn, winBtns);
+  chrome.append(settingsBtn, themeBtn, winBtns);
 
   const right = el('div', 'hdr-actions');
   right.append(actions, chrome);
@@ -958,6 +991,139 @@ function screenTabs() {
   return screen;
 }
 
+// ---------- screen: settings ----------
+function settingRow(label, hint, control) {
+  const row = el('div', 'set-row');
+  const left = el('div');
+  left.append(el('div', 'set-label', label));
+  if (hint) left.append(el('div', 'note', hint));
+  row.append(left, control);
+  return row;
+}
+
+function toggle(value, onChange) {
+  const b = el('button', 'chip' + (value ? ' on' : ''), value ? 'On' : 'Off');
+  b.addEventListener('click', () => onChange(!value));
+  return b;
+}
+
+function saveSetting(key, value) {
+  return window.api
+    .setSetting(key, value)
+    .then((s) => {
+      state.settings = { ...state.settings, ...s };
+      if (key === 'theme') state.theme = s.theme;
+      applyAccent();
+      render();
+    })
+    .catch((e) => {
+      state.error = e.message;
+      render();
+    });
+}
+
+function screenSettings() {
+  const s = state.settings;
+  const screen = el('div', 'screen');
+
+  const hdr = el('div', 'hdr');
+  hdr.append(
+    backLink('List', () => go('list')),
+    el('div', 'hdr-right', s.version ? `v${s.version}` : 'Settings')
+  );
+  screen.append(hdr);
+
+  const body = el('div', 'scroll pad');
+  body.append(el('div', 'hdr-title', 'Settings'));
+
+  // --- appearance ---
+  body.append(el('div', 'set-head', 'Appearance'));
+
+  const swatches = el('div', 'chips');
+  for (const [key, a] of Object.entries(ACCENTS)) {
+    const chip = el('button', 'chip swatch' + (s.accent === key ? ' on' : ''));
+    const dot = el('span', 'dot');
+    dot.style.background = prefersDark.matches ? a.dark[0] : a.light[0];
+    chip.append(dot, el('span', null, a.label));
+    chip.addEventListener('click', () => saveSetting('accent', key));
+    swatches.append(chip);
+  }
+  body.append(settingRow('Accent colour', 'Used for scores, active states and primary buttons.', el('div')));
+  body.append(swatches);
+
+  const themeChips = el('div', 'chips');
+  for (const t of ['system', 'light', 'dark']) {
+    const chip = el('button', 'chip' + (s.theme === t ? ' on' : ''), t);
+    chip.addEventListener('click', () => saveSetting('theme', t));
+    themeChips.append(chip);
+  }
+  body.append(settingRow('Theme', 'System follows Windows.', el('div')));
+  body.append(themeChips);
+
+  // --- behaviour ---
+  body.append(el('div', 'set-head', 'Behaviour'));
+  body.append(
+    settingRow(
+      'Desktop notifications',
+      'Notify when a poll finds listings you have not seen.',
+      toggle(s.notifications, (v) => saveSetting('notifications', v))
+    )
+  );
+  body.append(
+    settingRow(
+      'Start at login',
+      'Launch Shortlist when you sign in to Windows.',
+      toggle(s.openAtLogin, (v) => saveSetting('openAtLogin', v))
+    )
+  );
+
+  const minutes = el('input', 'f-input set-num');
+  minutes.type = 'number';
+  minutes.min = '1';
+  minutes.max = '180';
+  minutes.value = String(s.pollMinutes ?? 5);
+  const commit = () => {
+    const v = Number(minutes.value);
+    if (v && v !== s.pollMinutes) saveSetting('pollMinutes', v);
+  };
+  minutes.addEventListener('change', commit);
+  minutes.addEventListener('blur', commit);
+  body.append(settingRow('Check every (minutes)', 'How often to poll Supabase for new listings.', minutes));
+
+  // --- window ---
+  body.append(el('div', 'set-head', 'Window'));
+  const modeChips = el('div', 'chips');
+  for (const [key, label] of [['widget', 'Widget'], ['full', 'Full window']]) {
+    const chip = el('button', 'chip' + (document.body.classList.contains(key) ? ' on' : ''), label);
+    chip.addEventListener('click', () => window.api.setMode(key));
+    modeChips.append(chip);
+  }
+  body.append(settingRow('Layout', 'Widget is the compact always-on-top panel.', el('div')));
+  body.append(modeChips);
+
+  // --- about ---
+  body.append(el('div', 'set-head', 'About'));
+  const about = el('div', 'note');
+  about.append(
+    el('div', null, `${state.listings.length} listings loaded · ${state.profile.length} profile entries`),
+    el('div', null, `Config: ${s.configPath ?? '—'}`),
+    el('div', null, `Data: ${s.userDataPath ?? '—'}`),
+    el('div', null, s.packaged ? 'Installed build' : 'Development build')
+  );
+  body.append(about);
+  screen.append(body);
+
+  const foot = el('div', 'foot');
+  foot.append(
+    btn('Profile', 'btn', {
+      onClick: () => window.api.getProfile().then((p) => go('profile', { profile: p })),
+    }),
+    btn('Done', 'btn btn-acc', { onClick: () => go('list') })
+  );
+  screen.append(foot);
+  return screen;
+}
+
 // ---------- screen: triage deck ----------
 function triageQueue() {
   return inView('new');
@@ -1080,6 +1246,7 @@ function render() {
     import: screenImport,
     tabs: screenTabs,
     triage: screenTriage,
+    settings: screenSettings,
   };
   const build = screens[state.mode] ?? screenList;
   app.replaceChildren(build());
@@ -1115,8 +1282,10 @@ window.api.getSearches().then((s) => {
 window.api.getProfile().then((p) => {
   state.profile = p;
 });
-window.api.getTheme?.().then((t) => {
-  state.theme = t;
+window.api.getSettings?.().then((s) => {
+  state.settings = { ...state.settings, ...s };
+  state.theme = s.theme ?? 'system';
+  applyAccent();
   render();
 });
 

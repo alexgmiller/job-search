@@ -40,7 +40,39 @@ const { createClient } = require('@supabase/supabase-js');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-const POLL_MINUTES = Math.max(1, Number(process.env.POLL_MINUTES) || 5);
+// .env supplies the default; the settings screen can override it per-user.
+const ENV_POLL_MINUTES = Math.max(1, Number(process.env.POLL_MINUTES) || 5);
+
+const SETTING_DEFAULTS = {
+  accent: 'red',
+  theme: 'system',
+  notifications: true,
+  pollMinutes: ENV_POLL_MINUTES,
+  openAtLogin: false,
+};
+
+function getSettings() {
+  const saved = loadSettings();
+  const out = { ...SETTING_DEFAULTS };
+  for (const k of Object.keys(SETTING_DEFAULTS)) {
+    if (saved[k] !== undefined) out[k] = saved[k];
+  }
+  out.pollMinutes = Math.min(180, Math.max(1, Number(out.pollMinutes) || ENV_POLL_MINUTES));
+  // The OS is the source of truth for launch-at-login, not our own file.
+  try {
+    out.openAtLogin = app.getLoginItemSettings().openAtLogin;
+  } catch {
+    /* unsupported platform — fall back to the stored value */
+  }
+  return out;
+}
+
+let pollTimer = null;
+
+function schedulePoll() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(poll, getSettings().pollMinutes * 60 * 1000);
+}
 
 const supabase =
   SUPABASE_URL && SUPABASE_ANON_KEY
@@ -372,7 +404,7 @@ async function fetchSearches() {
 }
 
 function notifyNew(fresh) {
-  if (!Notification.isSupported()) return;
+  if (!Notification.isSupported() || !getSettings().notifications) return;
   const title =
     fresh.length === 1 ? 'New job listing' : `${fresh.length} new job listings`;
   const body = fresh
@@ -534,7 +566,7 @@ function buildTrayMenu() {
         checked: isAutoLaunchEnabled(),
         click: (item) => setAutoLaunch(item.checked),
       },
-      { label: `Checking every ${POLL_MINUTES} min`, enabled: false },
+      { label: `Checking every ${getSettings().pollMinutes} min`, enabled: false },
       { type: 'separator' },
       { label: 'Quit', click: () => app.quit() },
     ])
@@ -560,6 +592,34 @@ if (!gotLock) {
 
     ipcMain.handle('refresh', () => poll());
     ipcMain.handle('set-mode', (_e, mode) => setMode(mode));
+    ipcMain.handle('get-settings', () => ({
+      ...getSettings(),
+      version: app.getVersion(),
+      configPath: loadedEnvFrom ?? '(no .env found)',
+      userDataPath: app.getPath('userData'),
+      packaged: app.isPackaged,
+    }));
+    ipcMain.handle('set-setting', (_e, { key, value }) => {
+      if (!(key in SETTING_DEFAULTS)) throw new Error(`Unknown setting: ${key}`);
+      if (key === 'theme') applyTheme(value);
+      if (key === 'openAtLogin') {
+        try {
+          // Manages the real OS entry; the stored copy is only a mirror.
+          app.setLoginItemSettings({ openAtLogin: !!value, args: [] });
+        } catch {
+          /* unsupported platform */
+        }
+      }
+      if (key === 'pollMinutes') {
+        value = Math.min(180, Math.max(1, Number(value) || ENV_POLL_MINUTES));
+      }
+      saveSettings({ [key]: value });
+      if (key === 'pollMinutes') {
+        schedulePoll();
+        buildTrayMenu();
+      }
+      return getSettings();
+    });
     ipcMain.handle('get-theme', () => loadSettings().theme ?? 'system');
     ipcMain.handle('set-theme', (_e, value) => {
       const theme = applyTheme(value);
@@ -732,7 +792,7 @@ if (!gotLock) {
     ipcMain.handle('quit', () => app.quit());
 
     await poll();
-    setInterval(poll, POLL_MINUTES * 60 * 1000);
+    schedulePoll();
 
     if (SMOKE_TEST) {
       console.log('SMOKE OK');

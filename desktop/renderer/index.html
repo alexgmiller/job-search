@@ -433,6 +433,36 @@
     .chip:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
     .chip.on { background: var(--acc); border-color: var(--acc); color: var(--onacc); }
     .note { font-size: 9.5px; color: var(--mute); line-height: 1.5; }
+
+    /* ---------------- settings ---------------- */
+    .set-head {
+      font-size: 8.5px;
+      font-weight: 800;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin: 16px 0 8px;
+      padding-top: 8px;
+      border-top: 2px solid var(--div);
+    }
+    .set-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 7px;
+    }
+    .set-label { font-size: 11px; font-weight: 600; }
+    .set-row .note { margin-top: 2px; }
+    .set-num { width: 68px; flex-shrink: 0; text-align: right; }
+    .chip.swatch { display: inline-flex; align-items: center; gap: 6px; }
+    .chip .dot {
+      width: 9px;
+      height: 9px;
+      flex-shrink: 0;
+      border: 1px solid var(--div);
+    }
+    .chip.on .dot { border-color: var(--onacc); }
     .sub-line { font-size: 9.5px; color: var(--dim); margin-top: 4px; line-height: 1.5; }
 
     /* ---------------- profile / import rows ---------------- */
