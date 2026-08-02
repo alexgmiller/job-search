@@ -38,17 +38,51 @@ const ENV_PATHS = [
 ];
 let loadedEnvFrom = null;
 
-function loadEnvFiles() {
-  for (const p of ENV_PATHS) {
-    if (!fs.existsSync(p)) continue;
-    for (const line of fs.readFileSync(p, 'utf8').split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-      if (m && !(m[1] in process.env)) process.env[m[1]] = m[2];
-    }
-    loadedEnvFrom = loadedEnvFrom ?? p;
+// Appends one line per env-load attempt to CONFIG_DIR/startup.log — the
+// installed build has intermittently failed to see its config on launch
+// while the same exe launched by hand works, and this records exactly what
+// each process observed. Cheap enough to leave on permanently.
+function diag(line) {
+  try {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.appendFileSync(
+      path.join(CONFIG_DIR, 'startup.log'),
+      `${new Date().toISOString()} ${line}\n`
+    );
+  } catch {
+    /* diagnostics must never break the app */
   }
 }
-loadEnvFiles();
+
+function loadEnvFiles(reason) {
+  const seen = [];
+  for (const p of ENV_PATHS) {
+    let exists = false;
+    let readError = '';
+    let keys = [];
+    try {
+      exists = fs.existsSync(p);
+      if (exists) {
+        for (const line of fs.readFileSync(p, 'utf8').split(/\r?\n/)) {
+          const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+          if (!m) continue;
+          keys.push(m[1]);
+          if (!(m[1] in process.env)) process.env[m[1]] = m[2];
+        }
+        loadedEnvFrom = loadedEnvFrom ?? p;
+      }
+    } catch (e) {
+      readError = e.message;
+    }
+    seen.push(`${p} exists=${exists} keys=[${keys.join(',')}]${readError ? ' ERR=' + readError : ''}`);
+  }
+  diag(
+    `loadEnv(${reason}) pid=${process.pid} packaged=${app.isPackaged} ` +
+      `url=${(process.env.SUPABASE_URL ?? '').length}ch key=${(process.env.SUPABASE_ANON_KEY ?? '').length}ch ` +
+      `argv=[${process.argv.slice(1).join(' ')}] cwd=${process.cwd()} :: ${seen.join(' | ')}`
+  );
+}
+loadEnvFiles('module-load');
 
 const { createClient } = require('@supabase/supabase-js');
 
@@ -95,7 +129,7 @@ let supabaseClient = null;
 
 function getSupabase() {
   if (supabaseClient) return supabaseClient;
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) loadEnvFiles();
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) loadEnvFiles('retry');
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_ANON_KEY;
   if (!url || !key) return null;
