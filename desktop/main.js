@@ -453,14 +453,83 @@ async function poll() {
 // build/make-icons.js` after editing build/logo.svg.
 const iconPath = (size) => path.join(__dirname, 'build', `icon-${size}.png`);
 
+// The mark is three rectangles, so it's cheaper to rasterise it in memory at
+// whatever the current accent is than to ship a PNG set per colour. Geometry
+// matches build/logo.svg, expressed in its 256-unit design space.
+const LOGO_BARS = [
+  [40, 36, 176, 40],
+  [40, 108, 132, 40],
+  [40, 180, 88, 40],
+];
+
+// Light-mode ramp step per accent, mirroring ACCENTS in renderer.js. Icons
+// sit on OS chrome rather than our own background, so one tone serves both
+// light and dark shells.
+const ACCENT_HEX = {
+  red: '#ec3013',
+  amber: '#b26a00',
+  green: '#127a45',
+  teal: '#0f6f78',
+  blue: '#1d5fd0',
+  violet: '#6b3fc4',
+  slate: '#3f4a5a',
+};
+
+function makeLogoImage(size, hex) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+
+  // Supersample, then box-average, so small sizes get antialiased edges
+  // instead of the staircase a direct rasterisation would give.
+  const SS = 4;
+  const big = size * SS;
+  const coverage = new Float32Array(size * size);
+  for (let by = 0; by < big; by++) {
+    const y = ((by + 0.5) * 256) / big;
+    for (let bx = 0; bx < big; bx++) {
+      const x = ((bx + 0.5) * 256) / big;
+      let inside = false;
+      for (const [bxr, byr, bw, bh] of LOGO_BARS) {
+        if (x >= bxr && x < bxr + bw && y >= byr && y < byr + bh) {
+          inside = true;
+          break;
+        }
+      }
+      if (inside) coverage[Math.floor(by / SS) * size + Math.floor(bx / SS)] += 1;
+    }
+  }
+
+  // BGRA, premultiplied — matters on the antialiased edges.
+  const buf = Buffer.alloc(size * size * 4);
+  const max = SS * SS;
+  for (let i = 0; i < size * size; i++) {
+    const a = Math.round((255 * coverage[i]) / max);
+    buf[i * 4 + 0] = Math.round((b * a) / 255);
+    buf[i * 4 + 1] = Math.round((g * a) / 255);
+    buf[i * 4 + 2] = Math.round((r * a) / 255);
+    buf[i * 4 + 3] = a;
+  }
+  return nativeImage.createFromBitmap(buf, { width: size, height: size });
+}
+
+function accentHex() {
+  return ACCENT_HEX[getSettings().accent] ?? ACCENT_HEX.red;
+}
+
 function trayIcon() {
-  const img = nativeImage.createFromPath(iconPath(16));
-  return img.isEmpty() ? nativeImage.createEmpty() : img;
+  return makeLogoImage(16, accentHex());
 }
 
 function appIcon() {
-  const img = nativeImage.createFromPath(iconPath(256));
-  return img.isEmpty() ? undefined : img;
+  return makeLogoImage(256, accentHex());
+}
+
+// Repaint the window and tray marks to match the chosen accent.
+function applyAccentIcons() {
+  const hex = accentHex();
+  if (win && !win.isDestroyed()) win.setIcon(makeLogoImage(256, hex));
+  if (tray && !tray.isDestroyed()) tray.setImage(makeLogoImage(16, hex));
 }
 
 function showWindow() {
@@ -635,6 +704,7 @@ if (!gotLock) {
         schedulePoll();
         buildTrayMenu();
       }
+      if (key === 'accent') applyAccentIcons();
       return getSettings();
     });
     ipcMain.handle('get-theme', () => loadSettings().theme ?? 'system');
