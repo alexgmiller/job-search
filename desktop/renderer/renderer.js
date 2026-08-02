@@ -296,7 +296,7 @@ function screenList() {
   const hdr = el('div', 'hdr');
   const title = el('div', 'hdr-title');
   title.append(el('span', null, VIEW_TITLE[view]));
-  title.append(el('span', 'hdr-count', String(rows.length)));
+  title.append(el('span', 'hdr-count', state.loaded ? String(rows.length) : '·'));
   const actions = el('div', 'hdr-actions');
   actions.append(
     btn('Profile', 'btn', {
@@ -386,7 +386,11 @@ function screenList() {
 
   // Body
   const body = el('div', 'scroll');
-  if (!rows.length) {
+  if (!state.loaded) {
+    // Distinct from the empty state — "no listings" and "not fetched yet"
+    // look identical otherwise, and the first fetch happens after paint.
+    body.append(el('div', 'empty', 'Loading listings…'));
+  } else if (!rows.length) {
     body.append(el('div', 'empty', emptyText(view)));
   } else {
     for (const band of bandsFor(view, rows)) {

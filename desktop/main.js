@@ -92,6 +92,12 @@ function applyTheme(value) {
   return theme;
 }
 
+// The most recent poll result. The first poll can finish before the renderer
+// has registered its 'listings' listener — and a mode switch rebuilds the
+// window entirely — so the payload is replayed on every did-finish-load.
+// Without this the window can sit empty until the next poll, minutes later.
+let lastListings = null;
+
 // Ids already shown to the user, so background polls only notify about
 // genuinely new rows. Seeded (without notifying) on the first poll.
 const knownIds = new Set();
@@ -385,6 +391,7 @@ async function poll() {
     for (const l of listings) knownIds.add(l.id);
     if (!firstPoll && fresh.length > 0) notifyNew(fresh);
     firstPoll = false;
+    lastListings = listings;
     win?.webContents.send('listings', listings);
     return listings;
   } catch (e) {
@@ -447,6 +454,13 @@ function createWindow(mode = loadSettings().mode ?? 'full') {
   });
   win.once('ready-to-show', () => {
     if (!SMOKE_TEST) win.show();
+  });
+
+  // Replay the latest poll to a freshly-loaded renderer, and kick off a
+  // fetch if none has landed yet, so the list is never blank on open.
+  win.webContents.on('did-finish-load', () => {
+    if (lastListings) win.webContents.send('listings', lastListings);
+    else poll();
   });
 
   if (widget) {
