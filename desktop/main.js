@@ -62,6 +62,24 @@ function saveSettings(patch) {
   return next;
 }
 
+// Theme is 'system' | 'light' | 'dark'. Setting nativeTheme.themeSource
+// makes Chromium report the chosen scheme to prefers-color-scheme, so the
+// renderer's existing media queries do the work — no duplicate CSS.
+const THEMES = ['system', 'light', 'dark'];
+
+// Matches --bg in the stylesheet, so the window doesn't flash a different
+// colour before the page paints.
+function windowBg() {
+  return nativeTheme.shouldUseDarkColors ? '#201e1d' : '#f3f2f2';
+}
+
+function applyTheme(value) {
+  const theme = THEMES.includes(value) ? value : 'system';
+  nativeTheme.themeSource = theme;
+  if (win && !win.isDestroyed()) win.setBackgroundColor(windowBg());
+  return theme;
+}
+
 // Ids already shown to the user, so background polls only notify about
 // genuinely new rows. Seeded (without notifying) on the first poll.
 const knownIds = new Set();
@@ -394,7 +412,7 @@ function createWindow(mode = loadSettings().mode ?? 'full') {
     show: false,
     // Match the stylesheet's --bg so the window doesn't flash white before
     // the page paints (very visible in dark mode).
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#14161a' : '#f4f5f7',
+    backgroundColor: windowBg(),
     frame: !widget,
     alwaysOnTop: widget,
     skipTaskbar: widget,
@@ -501,6 +519,9 @@ if (!gotLock) {
   app.on('second-instance', showWindow);
 
   app.whenReady().then(async () => {
+    // Apply the saved theme before the window exists so its background
+    // colour is right on the very first paint.
+    applyTheme(loadSettings().theme ?? 'system');
     createWindow();
 
     tray = new Tray(trayIcon());
@@ -510,6 +531,12 @@ if (!gotLock) {
 
     ipcMain.handle('refresh', () => poll());
     ipcMain.handle('set-mode', (_e, mode) => setMode(mode));
+    ipcMain.handle('get-theme', () => loadSettings().theme ?? 'system');
+    ipcMain.handle('set-theme', (_e, value) => {
+      const theme = applyTheme(value);
+      saveSettings({ theme });
+      return theme;
+    });
     ipcMain.handle('minimize', () => win?.hide());
     ipcMain.handle('get-searches', () => fetchSearches());
     // Descriptions are up to 6k chars, so they're fetched per listing when

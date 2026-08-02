@@ -37,6 +37,7 @@ const state = {
   locationFilter: '',
   activeRegions: new Set(),
   editingSearchId: null,
+  theme: 'system',
   importResult: null, // { fileName, method, rows: [{kind,title,content,on}] }
   tailor: null, // { listing, step, text, error }
   error: '',
@@ -57,6 +58,9 @@ const ICON_PATHS = {
   left: [['path', { d: 'm12 19-7-7 7-7' }], ['path', { d: 'M19 12H5' }]],
   plus: [['path', { d: 'M5 12h14' }], ['path', { d: 'M12 5v14' }]],
   trash: [['path', { d: 'M3 6h18' }], ['path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6' }], ['path', { d: 'M10 11v6' }], ['path', { d: 'M14 11v6' }]],
+  sun: [['circle', { cx: 12, cy: 12, r: 4 }], ['path', { d: 'M12 2v2' }], ['path', { d: 'M12 20v2' }], ['path', { d: 'm4.93 4.93 1.41 1.41' }], ['path', { d: 'm17.66 17.66 1.41 1.41' }], ['path', { d: 'M2 12h2' }], ['path', { d: 'M20 12h2' }], ['path', { d: 'm6.34 17.66-1.41 1.41' }], ['path', { d: 'm19.07 4.93-1.41 1.41' }]],
+  moon: [['path', { d: 'M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z' }]],
+  monitor: [['rect', { x: 2, y: 3, width: 20, height: 14, rx: 2 }], ['path', { d: 'M8 21h8' }], ['path', { d: 'M12 17v4' }]],
 };
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -310,14 +314,34 @@ function screenList() {
       },
     })
   );
+  // Theme cycles system → light → dark. The icon shows the current choice,
+  // so it doubles as an indicator.
+  const THEME_ICON = { system: 'monitor', light: 'sun', dark: 'moon' };
+  const THEME_NEXT = { system: 'light', light: 'dark', dark: 'system' };
+  const themeBtn = btn('', 'btn', {
+    iconName: THEME_ICON[state.theme] ?? 'monitor',
+    title: `Theme: ${state.theme} — click for ${THEME_NEXT[state.theme] ?? 'light'}`,
+    onClick: () => {
+      const next = THEME_NEXT[state.theme] ?? 'light';
+      window.api.setTheme(next).then((applied) => {
+        state.theme = applied;
+        render();
+      });
+    },
+  });
+
   const winBtns = el('div', 'hdr-actions');
   winBtns.id = 'win-btns';
   winBtns.append(
     btn('', 'btn', { iconName: 'ext', title: 'Full window', onClick: () => window.api.setMode('full') }),
     btn('', 'btn', { iconName: 'x', title: 'Hide to tray', onClick: () => window.api.minimize() })
   );
+  const chrome = el('div', 'hdr-actions');
+  chrome.id = 'chrome-btns';
+  chrome.append(themeBtn, winBtns);
+
   const right = el('div', 'hdr-actions');
-  right.append(actions, winBtns);
+  right.append(actions, chrome);
   hdr.append(title, right);
   screen.append(hdr);
 
@@ -1086,6 +1110,10 @@ window.api.getSearches().then((s) => {
 });
 window.api.getProfile().then((p) => {
   state.profile = p;
+});
+window.api.getTheme?.().then((t) => {
+  state.theme = t;
+  render();
 });
 
 render();

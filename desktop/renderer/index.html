@@ -509,16 +509,19 @@
     body.widget { border: 1px solid var(--div); }
     body.widget .hdr { -webkit-app-region: drag; }
     body.widget .hdr button, body.widget .hdr .btn { -webkit-app-region: no-drag; }
-    /* Window chrome is app furniture, not part of the design language —
-       keep it quiet so it doesn't compete with Profile/Refresh. */
-    #win-btns { display: none; gap: 2px; }
-    body.widget #win-btns { display: flex; }
-    #win-btns .btn {
+    /* Window chrome and the theme switch are app furniture, not part of the
+       design language — keep them quiet so they don't compete with
+       Profile/Refresh. The theme button shows in both window modes; the
+       expand/hide pair is widget-only. */
+    #chrome-btns { gap: 2px; }
+    #chrome-btns .btn {
       border-color: transparent;
       color: var(--mute);
       padding: 4px 5px;
     }
-    #win-btns .btn:hover { color: var(--ink); }
+    #chrome-btns .btn:hover { color: var(--ink); }
+    #win-btns { display: none; gap: 2px; }
+    body.widget #win-btns { display: flex; }
 
     /* Full window: same components, roomier metrics. */
     body.full { font-size: 13px; }

@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('api', {
   onError: (cb) => ipcRenderer.on('load-error', (_e, msg) => cb(msg)),
   refresh: () => ipcRenderer.invoke('refresh'),
   setMode: (mode) => ipcRenderer.invoke('set-mode', mode),
+  getTheme: () => ipcRenderer.invoke('get-theme'),
+  setTheme: (value) => ipcRenderer.invoke('set-theme', value),
   minimize: () => ipcRenderer.invoke('minimize'),
   getSearches: () => ipcRenderer.invoke('get-searches'),
   getListing: (id) => ipcRenderer.invoke('get-listing', id),
