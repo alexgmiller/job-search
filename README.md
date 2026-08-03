@@ -79,6 +79,19 @@ Closing the window minimizes to the tray so notifications keep working.
   pipeline, notes) plus **📄 Tailor resume** rendered inline. This is what
   makes widget mode usable, since list cards there are too narrow for
   per-card buttons.
+- **Undo**: every keep/apply/dismiss/restore (and bulk action) offers a
+  7-second Undo toast that restores the exact prior state.
+- **Bulk dismiss**: the ✕ on a band header clears the whole band (confirm
+  above 50 rows; Undo works on the lot).
+- **Search**: the magnifier in the header searches role/company/location
+  across the *entire* table server-side, not just the 500 newest the list
+  holds.
+- **Follow-ups**: In Progress footer shows "Follow-ups due · N" — apps
+  still at "applied" after N days (Settings, default 10). Toggle to see
+  only those; move a listing to interviewing/rejected to clear it.
+- **Mute companies**: "Mute <company>" on a listing's detail screen hides
+  its listings and stops the scraper collecting them (migration-8 table
+  `muted_companies`); manage the list in Settings.
 - **Views**: New (untouched listings) / Seen (reviewed, might apply) /
   In Progress (applications, with status pipeline Applied → Interviewing
   → Offer/Rejected and per-listing notes) / Dismissed (not interested,

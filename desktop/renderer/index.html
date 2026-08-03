@@ -514,6 +514,84 @@
     }
     .imp-row:not(.off) .box { background: var(--acc); border-color: var(--acc); color: var(--onacc); }
 
+    /* ---------------- undo toast ---------------- */
+    .toast {
+      position: fixed;
+      left: 10px;
+      right: 10px;
+      bottom: 48px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      background: var(--ink);
+      color: var(--bg);
+      padding: 8px 12px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    }
+    .toast-label { font-size: 10px; font-weight: 600; }
+    .toast-undo {
+      background: none;
+      border: none;
+      color: var(--acc7);
+      font-size: 9.5px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+    .toast-undo:hover { text-decoration: underline; }
+    @media (prefers-color-scheme: dark) { .toast { color: #201e1d; } }
+
+    /* ---------------- band bulk-dismiss ---------------- */
+    .band-right { display: inline-flex; align-items: center; gap: 8px; }
+    .band-x {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border: 1px solid currentColor;
+      background: none;
+      color: inherit;
+      opacity: .55;
+    }
+    .band-x:hover { opacity: 1; }
+
+    /* ---------------- follow-ups ---------------- */
+    .row-due {
+      font-size: 7.5px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--acc7);
+      border: 1px solid var(--acc);
+      padding: 1px 4px;
+      margin-right: 6px;
+      vertical-align: 1px;
+    }
+
+    /* ---------------- search ---------------- */
+    .search-bar { padding-bottom: 10px; }
+
+    /* ---------------- mute ---------------- */
+    .detail-mute {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 14px;
+      padding: 4px 0;
+      background: none;
+      border: none;
+      color: var(--mute);
+      font-size: 8.5px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .detail-mute:hover { color: var(--acc7); }
+
     /* ---------------- misc ---------------- */
     .empty { color: var(--mute); font-size: 9.5px; text-align: center; padding: 40px 24px; line-height: 1.6; }
     .err {

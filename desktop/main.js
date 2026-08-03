@@ -95,6 +95,8 @@ const SETTING_DEFAULTS = {
   notifications: true,
   pollMinutes: ENV_POLL_MINUTES,
   openAtLogin: false,
+  // Days after applying before an application counts as needing a follow-up.
+  followUpDays: 10,
 };
 
 function getSettings() {
@@ -104,6 +106,7 @@ function getSettings() {
     if (saved[k] !== undefined) out[k] = saved[k];
   }
   out.pollMinutes = Math.min(180, Math.max(1, Number(out.pollMinutes) || ENV_POLL_MINUTES));
+  out.followUpDays = Math.min(60, Math.max(1, Number(out.followUpDays) || SETTING_DEFAULTS.followUpDays));
   // The OS is the source of truth for launch-at-login, not our own file.
   try {
     out.openAtLogin = app.getLoginItemSettings().openAtLogin;
@@ -747,6 +750,9 @@ if (!gotLock) {
       if (key === 'pollMinutes') {
         value = Math.min(180, Math.max(1, Number(value) || ENV_POLL_MINUTES));
       }
+      if (key === 'followUpDays') {
+        value = Math.min(60, Math.max(1, Number(value) || SETTING_DEFAULTS.followUpDays));
+      }
       saveSettings({ [key]: value });
       if (key === 'pollMinutes') {
         schedulePoll();
@@ -814,6 +820,71 @@ if (!gotLock) {
         .eq('id', id);
       if (error) throw new Error(error.message);
     });
+    // Bulk state change + undo. Only lifecycle fields may be patched.
+    const LISTING_PATCH_KEYS = new Set(['seen', 'dismissed_at', 'status', 'applied_at']);
+    ipcMain.handle('update-listings', async (_e, { ids, patch }) => {
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      if (!Array.isArray(ids) || !ids.length) return 0;
+      const clean = {};
+      for (const [k, v] of Object.entries(patch ?? {})) {
+        if (LISTING_PATCH_KEYS.has(k)) clean[k] = v;
+      }
+      if (!Object.keys(clean).length) throw new Error('No valid fields in patch');
+      const { error } = await getSupabase()
+        .from('job_listings')
+        .update(clean)
+        .in('id', ids.slice(0, 1000));
+      if (error) throw new Error(error.message);
+      return ids.length;
+    });
+
+    // Server-side search across the whole table — the renderer only holds
+    // the newest 500, which is exactly when search matters.
+    ipcMain.handle('search-listings', async (_e, q) => {
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const term = String(q ?? '').replace(/[,()%_]/g, ' ').trim();
+      if (term.length < 2) return [];
+      const pat = `%${term}%`;
+      const { data, error } = await getSupabase()
+        .from('job_listings')
+        .select(
+          'id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason, fit_parts'
+        )
+        .or(`role.ilike.${pat},company.ilike.${pat},location.ilike.${pat}`)
+        .order('fit_score', { ascending: false, nullsFirst: false })
+        .limit(100);
+      if (error) throw new Error(error.message);
+      return data ?? [];
+    });
+
+    // Company mute list. Tolerate migration-8 being absent on reads.
+    async function fetchMuted() {
+      if (!getSupabase()) return [];
+      const { data, error } = await getSupabase()
+        .from('muted_companies')
+        .select('id, name')
+        .order('name', { ascending: true });
+      if (error) return [];
+      return data ?? [];
+    }
+    ipcMain.handle('get-muted', () => fetchMuted());
+    ipcMain.handle('mute-company', async (_e, name) => {
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const clean = String(name ?? '').trim();
+      if (!clean) throw new Error('No company name');
+      const { error } = await getSupabase()
+        .from('muted_companies')
+        .upsert({ name: clean }, { onConflict: 'name', ignoreDuplicates: true });
+      if (error) throw new Error(error.message);
+      return fetchMuted();
+    });
+    ipcMain.handle('unmute-company', async (_e, id) => {
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      const { error } = await getSupabase().from('muted_companies').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      return fetchMuted();
+    });
+
     ipcMain.handle('dismiss', async (_e, id) => {
       if (!getSupabase()) throw new Error('Supabase not configured');
       const { error } = await getSupabase()

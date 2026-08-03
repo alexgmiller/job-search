@@ -314,18 +314,31 @@ async function main() {
     }
   }
 
+  // Muted companies never reach the table at all. Tolerate the table not
+  // existing (migration-8 not run) — an error just means "nothing muted".
+  const { data: mutedRows } = await supabase.from('muted_companies').select('name');
+  const muted = new Set((mutedRows ?? []).map((m) => m.name.toLowerCase()));
+
   // First matching search claims the listing; url dedupe handles the rest.
   const rows = [];
   const seenUrls = new Set();
+  let mutedCount = 0;
   for (const l of listings) {
     if (!l.url || seenUrls.has(l.url)) continue;
+    if (muted.has((l.company ?? '').toLowerCase())) {
+      mutedCount++;
+      continue;
+    }
     const search = searches.find((s) => matchesSearch(l, s));
     if (!search) continue;
     seenUrls.add(l.url);
     rows.push({ ...l, search_id: search.id });
   }
 
-  console.log(`\n${listings.length} listings fetched, ${rows.length} match a search.`);
+  console.log(
+    `\n${listings.length} listings fetched, ${rows.length} match a search` +
+      (mutedCount ? `, ${mutedCount} dropped from ${muted.size} muted companies.` : '.')
+  );
 
   if (DRY_RUN) {
     for (const r of rows) {

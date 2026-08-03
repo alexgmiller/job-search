@@ -38,7 +38,13 @@ const state = {
   activeRegions: new Set(),
   editingSearchId: null,
   theme: 'system',
-  settings: { accent: 'red', theme: 'system', notifications: true, pollMinutes: 5, openAtLogin: false },
+  settings: { accent: 'red', theme: 'system', notifications: true, pollMinutes: 5, openAtLogin: false, followUpDays: 10 },
+  toast: null, // { label, undoFn }
+  followUpsOnly: false,
+  searchQuery: '',
+  searchResults: [],
+  searchBusy: false,
+  muted: [],
   importResult: null, // { fileName, method, rows: [{kind,title,content,on}] }
   tailor: null, // { listing, step, text, error }
   error: '',
@@ -63,6 +69,9 @@ const ICON_PATHS = {
   moon: [['path', { d: 'M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z' }]],
   monitor: [['rect', { x: 2, y: 3, width: 20, height: 14, rx: 2 }], ['path', { d: 'M8 21h8' }], ['path', { d: 'M12 17v4' }]],
   sliders: [['path', { d: 'M20 7h-9' }], ['path', { d: 'M14 17H5' }], ['circle', { cx: 17, cy: 17, r: 3 }], ['circle', { cx: 7, cy: 7, r: 3 }]],
+  search: [['circle', { cx: 11, cy: 11, r: 8 }], ['path', { d: 'm21 21-4.3-4.3' }]],
+  bell: [['path', { d: 'M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9' }], ['path', { d: 'M10.3 21a1.94 1.94 0 0 0 3.4 0' }]],
+  mute: [['path', { d: 'm2 2 20 20' }], ['path', { d: 'M18.89 13.23A7.12 7.12 0 0 0 19 12v-2' }], ['path', { d: 'M9.5 4.5A5 5 0 0 1 17 8v2c0 .3 0 .6.05.88' }], ['path', { d: 'M5 10v2a7 7 0 0 0 12 5' }]],
 };
 
 // Accent options. Each has a light and dark pair — [--acc, --acc7] — because
@@ -184,9 +193,19 @@ function inView(view) {
     rows = rows.filter((l) => (l.location ?? '').toLowerCase().includes(f));
   }
   if (view === 'progress') {
+    if (state.followUpsOnly) rows = rows.filter(followUpDue);
     return rows.sort((a, b) => (b.applied_at ?? '').localeCompare(a.applied_at ?? ''));
   }
   return rows.sort((a, b) => (b.fit_score ?? -1) - (a.fit_score ?? -1));
+}
+
+// An application needs a follow-up when it's still sitting at "applied"
+// with no movement for followUpDays. Moving it to interviewing/rejected
+// (ghosted counts as rejected) clears it.
+function followUpDue(l) {
+  if (l.status !== 'applied' || !l.applied_at) return false;
+  const days = state.settings.followUpDays ?? 10;
+  return Date.now() - new Date(l.applied_at).getTime() > days * 864e5;
 }
 
 // Counts ignore the tab/region filters so the strip reads as a global tally.
@@ -229,29 +248,158 @@ function bandsFor(view, rows) {
 // ---------- mutations ----------
 // Optimistic: patch locally, render, then persist. On failure surface the
 // message; the next poll re-syncs from the server.
-function mutate(listing, patch, call, failMsg) {
+// ---------- undo toast ----------
+// Every lifecycle mutation offers a few seconds of undo — mis-clicks are
+// cheap in the triage deck, so recovery has to be cheap too.
+let toastTimer = null;
+
+function showToast(label, undoFn) {
+  state.toast = { label, undoFn };
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    state.toast = null;
+    render();
+  }, 7000);
+  render();
+}
+
+function clearToast() {
+  clearTimeout(toastTimer);
+  state.toast = null;
+}
+
+function applyLocal(listing, patch) {
   Object.assign(listing, patch);
   const stored = state.listings.find((x) => x.id === listing.id);
   if (stored && stored !== listing) Object.assign(stored, patch);
+}
+
+function mutate(listing, patch, call, failMsg, undoLabel) {
+  // Capture the prior values of exactly the fields being changed, so undo
+  // restores the listing to whatever state it was in — not a guessed one.
+  const prev = {};
+  for (const k of Object.keys(patch)) prev[k] = listing[k] ?? null;
+
+  applyLocal(listing, patch);
   render();
   call().catch(() => {
     state.error = failMsg;
     render();
   });
+
+  if (undoLabel) {
+    showToast(undoLabel, () => {
+      applyLocal(listing, prev);
+      clearToast();
+      render();
+      window.api.updateListings([listing.id], prev).catch(() => {
+        state.error = 'Undo failed — refresh to re-sync.';
+        render();
+      });
+    });
+  }
 }
 
-const actKeep = (l) => mutate(l, { seen: true }, () => window.api.markSeen(l.id), 'Could not keep.');
+const actKeep = (l) =>
+  mutate(l, { seen: true }, () => window.api.markSeen(l.id), 'Could not keep.', 'Kept');
 const actApply = (l) =>
   mutate(
     l,
     { status: 'applied', applied_at: new Date().toISOString(), seen: true, dismissed_at: null },
     () => window.api.markApplied(l.id),
-    'Could not mark applied.'
+    'Could not mark applied.',
+    'Marked applied'
   );
 const actDismiss = (l) =>
-  mutate(l, { seen: true, dismissed_at: new Date().toISOString() }, () => window.api.dismiss(l.id), 'Could not dismiss.');
+  mutate(
+    l,
+    { seen: true, dismissed_at: new Date().toISOString() },
+    () => window.api.dismiss(l.id),
+    'Could not dismiss.',
+    'Dismissed'
+  );
 const actRestore = (l) =>
-  mutate(l, { seen: true, dismissed_at: null }, () => window.api.restore(l.id), 'Could not restore.');
+  mutate(l, { seen: true, dismissed_at: null }, () => window.api.restore(l.id), 'Could not restore.', 'Restored');
+
+// Bulk dismiss for a whole band. Same optimistic pattern, one server call.
+function bulkDismiss(rows, label) {
+  if (!rows.length) return;
+  const now = new Date().toISOString();
+  const prev = rows.map((r) => ({ id: r.id, listing: r, seen: r.seen, dismissed_at: r.dismissed_at }));
+  for (const r of rows) applyLocal(r, { seen: true, dismissed_at: now });
+  render();
+  window.api.updateListings(rows.map((r) => r.id), { seen: true, dismissed_at: now }).catch(() => {
+    state.error = 'Bulk dismiss failed — refresh to re-sync.';
+    render();
+  });
+  showToast(`Dismissed ${rows.length} (${label})`, () => {
+    // Prior states can differ per row (seen flags), so restore per group.
+    const groups = new Map();
+    for (const p of prev) {
+      applyLocal(p.listing, { seen: p.seen, dismissed_at: p.dismissed_at });
+      const key = JSON.stringify([p.seen, p.dismissed_at]);
+      if (!groups.has(key)) groups.set(key, { patch: { seen: p.seen, dismissed_at: p.dismissed_at }, ids: [] });
+      groups.get(key).ids.push(p.id);
+    }
+    clearToast();
+    render();
+    for (const g of groups.values()) {
+      window.api.updateListings(g.ids, g.patch).catch(() => {
+        state.error = 'Undo failed — refresh to re-sync.';
+        render();
+      });
+    }
+  });
+}
+
+// Mute a company: stop the scraper collecting it, and clear what's already
+// in the triage views. Undo reverses both.
+function muteCompanyFlow(company) {
+  if (!company) return;
+  if (!confirm(`Mute ${company}? Its listings are hidden and the scraper stops collecting them.`)) return;
+
+  const affected = state.listings.filter(
+    (l) => l.company === company && (viewOf(l) === 'new' || viewOf(l) === 'seen')
+  );
+  const now = new Date().toISOString();
+  const prev = affected.map((r) => ({ listing: r, seen: r.seen, dismissed_at: r.dismissed_at }));
+  for (const r of affected) applyLocal(r, { seen: true, dismissed_at: now });
+
+  window.api
+    .muteCompany(company)
+    .then((m) => {
+      state.muted = m;
+      render();
+    })
+    .catch((e) => {
+      state.error = e.message;
+      render();
+    });
+  if (affected.length) {
+    window.api.updateListings(affected.map((r) => r.id), { seen: true, dismissed_at: now });
+  }
+
+  go('list');
+  showToast(`Muted ${company}${affected.length ? ` · ${affected.length} hidden` : ''}`, () => {
+    for (const p of prev) applyLocal(p.listing, { seen: p.seen, dismissed_at: p.dismissed_at });
+    const groups = new Map();
+    for (const p of prev) {
+      const key = JSON.stringify([p.seen, p.dismissed_at]);
+      if (!groups.has(key)) groups.set(key, { patch: { seen: p.seen, dismissed_at: p.dismissed_at }, ids: [] });
+      groups.get(key).ids.push(p.listing.id);
+    }
+    for (const g of groups.values()) window.api.updateListings(g.ids, g.patch).catch(() => {});
+    const entry = state.muted.find((m) => m.name.toLowerCase() === company.toLowerCase());
+    if (entry) {
+      window.api.unmuteCompany(entry.id).then((m) => {
+        state.muted = m;
+        render();
+      });
+    }
+    clearToast();
+    render();
+  });
+}
 
 function go(mode, patch = {}) {
   Object.assign(state, patch, { mode });
@@ -260,6 +408,9 @@ function go(mode, patch = {}) {
 
 function openDetail(l) {
   state.detailListing = l;
+  // Remember where the user came from, so Back returns to search results
+  // rather than dumping them on the list.
+  state.detailReturn = state.mode === 'search' ? 'search' : 'list';
   state.mode = 'detail';
   render();
   window.api
@@ -363,15 +514,24 @@ function screenList() {
     btn('', 'btn', { iconName: 'ext', title: 'Full window', onClick: () => window.api.setMode('full') }),
     btn('', 'btn', { iconName: 'x', title: 'Hide to tray', onClick: () => window.api.minimize() })
   );
+  const searchBtn = btn('', 'btn', {
+    iconName: 'search',
+    title: 'Search all listings',
+    onClick: () => go('search'),
+  });
+
   const settingsBtn = btn('', 'btn', {
     iconName: 'sliders',
     title: 'Settings',
-    onClick: () => window.api.getSettings().then((s) => go('settings', { settings: s })),
+    onClick: () =>
+      Promise.all([window.api.getSettings(), window.api.getMuted?.() ?? []]).then(([s, m]) =>
+        go('settings', { settings: s, muted: m })
+      ),
   });
 
   const chrome = el('div', 'hdr-actions');
   chrome.id = 'chrome-btns';
-  chrome.append(settingsBtn, themeBtn, winBtns);
+  chrome.append(searchBtn, settingsBtn, themeBtn, winBtns);
 
   const right = el('div', 'hdr-actions');
   right.append(actions, chrome);
@@ -385,6 +545,7 @@ function screenList() {
     cell.addEventListener('click', () => {
       state.activeView = v.key;
       state.openRowId = null;
+      state.followUpsOnly = false;
       render();
     });
     strip.append(cell);
@@ -428,7 +589,21 @@ function screenList() {
   } else {
     for (const band of bandsFor(view, rows)) {
       const head = el('div', 'band' + (band.strong ? ' strong' : ''));
-      head.append(el('span', null, band.label), el('span', null, String(band.rows.length)));
+      const right = el('span', 'band-right');
+      right.append(el('span', null, String(band.rows.length)));
+      // Bulk dismiss for triage-able views; the undo toast is the safety net.
+      if (view === 'new' || view === 'seen') {
+        const clear = el('button', 'band-x');
+        clear.append(icon('x', 9));
+        clear.title = `Dismiss all ${band.rows.length} in “${band.label}”`;
+        clear.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (band.rows.length > 50 && !confirm(`Dismiss all ${band.rows.length} listings in “${band.label}”?`)) return;
+          bulkDismiss([...band.rows], band.label);
+        });
+        right.append(clear);
+      }
+      head.append(el('span', null, band.label), right);
       body.append(head);
       for (const l of band.rows) body.append(listRow(l, view));
     }
@@ -437,15 +612,36 @@ function screenList() {
 
   // Footer
   const foot = el('div', 'foot');
-  const queue = inView('new');
-  foot.append(
-    btn(`Triage queue · ${queue.length}`, 'btn btn-lg' + (view === 'new' ? ' btn-acc' : ''), {
-      iconName: 'play',
-      disabled: !queue.length,
-      onClick: () => go('triage', { triageIndex: 0 }),
-    }),
-    btn('Filters', 'btn', { onClick: () => go('tabs', { editingSearchId: 'filters' }) })
-  );
+  if (view === 'progress') {
+    // The design handoff specifies this footer for In Progress: an outline
+    // "Follow-ups due" toggle instead of the triage button.
+    const due = state.listings.filter((l) => viewOf(l) === 'progress' && followUpDue(l)).length;
+    foot.append(
+      btn(
+        state.followUpsOnly ? `Showing follow-ups · ${due}` : `Follow-ups due · ${due}`,
+        'btn btn-lg' + (state.followUpsOnly ? ' btn-acc' : ''),
+        {
+          iconName: 'bell',
+          disabled: !due && !state.followUpsOnly,
+          onClick: () => {
+            state.followUpsOnly = !state.followUpsOnly;
+            render();
+          },
+        }
+      ),
+      btn('Filters', 'btn', { onClick: () => go('tabs', { editingSearchId: 'filters' }) })
+    );
+  } else {
+    const queue = inView('new');
+    foot.append(
+      btn(`Triage queue · ${queue.length}`, 'btn btn-lg' + (view === 'new' ? ' btn-acc' : ''), {
+        iconName: 'play',
+        disabled: !queue.length,
+        onClick: () => go('triage', { triageIndex: 0 }),
+      }),
+      btn('Filters', 'btn', { onClick: () => go('tabs', { editingSearchId: 'filters' }) })
+    );
+  }
   screen.append(foot);
   return screen;
 }
@@ -466,7 +662,10 @@ function listRow(l, view) {
 
   const score = el('div', `row-score ${scoreClass(l.fit_score ?? 0)}`, l.fit_score == null ? '–' : String(l.fit_score));
   const text = el('div', 'row-text');
-  text.append(el('div', 'row-role', l.role), el('div', 'row-sub', [l.company, l.location].filter(Boolean).join(' · ')));
+  const sub = el('div', 'row-sub');
+  if (view === 'progress' && followUpDue(l)) sub.append(el('span', 'row-due', 'Follow up'));
+  sub.append(document.createTextNode([l.company, l.location].filter(Boolean).join(' · ')));
+  text.append(el('div', 'row-role', l.role), sub);
 
   const acts = el('div', 'row-acts');
   if (view === 'dismissed') {
@@ -548,7 +747,10 @@ function screenDetail() {
 
   const hdr = el('div', 'hdr');
   hdr.append(
-    backLink(VIEW_TITLE[state.activeView], () => go('list')),
+    backLink(
+      state.detailReturn === 'search' ? 'Search' : VIEW_TITLE[state.activeView],
+      () => go(state.detailReturn === 'search' ? 'search' : 'list')
+    ),
     el('div', 'hdr-right', sourceOf(l.url))
   );
   screen.append(hdr);
@@ -575,6 +777,14 @@ function screenDetail() {
   if (tags) body.append(tags);
 
   body.append(el('div', 'desc', l.description ?? 'Loading description…'));
+
+  // Mute lives in the scrolling body, not the pinned action grid — it's a
+  // rare action and shouldn't compete with Keep/Applied/Out.
+  const muteBtn = el('button', 'detail-mute');
+  muteBtn.append(icon('mute', 10), el('span', null, `Mute ${l.company}`));
+  muteBtn.title = 'Hide this company everywhere and stop collecting its listings';
+  muteBtn.addEventListener('click', () => muteCompanyFlow(l.company));
+  body.append(muteBtn);
   screen.append(body);
 
   const foot = el('div', 'foot foot-grid');
@@ -991,6 +1201,90 @@ function screenTabs() {
   return screen;
 }
 
+// ---------- screen: search ----------
+// Server-side, so it covers the whole table — the renderer only holds the
+// newest 500 listings, which is exactly when search matters.
+let searchDebounce = null;
+
+function runSearch(q) {
+  state.searchQuery = q;
+  clearTimeout(searchDebounce);
+  if (q.trim().length < 2) {
+    state.searchResults = [];
+    state.searchBusy = false;
+    render();
+    return;
+  }
+  state.searchBusy = true;
+  searchDebounce = setTimeout(() => {
+    const asked = q;
+    window.api
+      .searchListings(q)
+      .then((rows) => {
+        if (state.searchQuery !== asked) return; // stale response
+        state.searchResults = rows;
+        state.searchBusy = false;
+        render();
+      })
+      .catch((e) => {
+        state.searchBusy = false;
+        state.error = e.message;
+        render();
+      });
+  }, 300);
+}
+
+function screenSearch() {
+  const screen = el('div', 'screen');
+
+  const hdr = el('div', 'hdr');
+  hdr.append(
+    backLink('List', () => go('list')),
+    el('div', 'hdr-right',
+      state.searchBusy ? 'Searching…' : state.searchQuery.trim().length >= 2 ? `${state.searchResults.length} results` : 'All listings')
+  );
+  screen.append(hdr);
+
+  const bar = el('div', 'pad search-bar');
+  const input = el('input', 'f-input');
+  input.type = 'text';
+  input.placeholder = 'Role, company or location…';
+  input.value = state.searchQuery;
+  input.addEventListener('input', () => runSearch(input.value));
+  bar.append(input);
+  screen.append(bar);
+
+  const body = el('div', 'scroll');
+  if (state.searchQuery.trim().length < 2) {
+    body.append(el('div', 'empty', 'Type at least two characters. Searches every stored listing, not just the newest 500.'));
+  } else if (!state.searchBusy && !state.searchResults.length) {
+    body.append(el('div', 'empty', `Nothing matches “${state.searchQuery.trim()}”.`));
+  } else {
+    for (const l of state.searchResults) {
+      const row = el('div', 'row');
+      row.append(el('div', `row-score ${scoreClass(l.fit_score ?? 0)}`, l.fit_score == null ? '–' : String(l.fit_score)));
+      const text = el('div', 'row-text');
+      const stateLabel = { new: '', seen: 'Kept', progress: l.status ?? '', dismissed: 'Dismissed' }[viewOf(l)];
+      text.append(
+        el('div', 'row-role', l.role),
+        el('div', 'row-sub', [l.company, l.location, stateLabel].filter(Boolean).join(' · '))
+      );
+      row.append(text, el('div'));
+      row.addEventListener('click', () => openDetail(l));
+      body.append(row);
+    }
+  }
+  screen.append(body);
+
+  const foot = el('div', 'foot');
+  foot.append(el('div', 'foot-note', 'Search covers role, company and location'));
+  screen.append(foot);
+
+  // Focus after mount.
+  setTimeout(() => input.focus(), 0);
+  return screen;
+}
+
 // ---------- screen: settings ----------
 function settingRow(label, hint, control) {
   const row = el('div', 'set-row');
@@ -1089,6 +1383,51 @@ function screenSettings() {
   minutes.addEventListener('change', commit);
   minutes.addEventListener('blur', commit);
   body.append(settingRow('Check every (minutes)', 'How often to poll Supabase for new listings.', minutes));
+
+  const followUp = el('input', 'f-input set-num');
+  followUp.type = 'number';
+  followUp.min = '1';
+  followUp.max = '60';
+  followUp.value = String(s.followUpDays ?? 10);
+  const commitFollowUp = () => {
+    const v = Number(followUp.value);
+    if (v && v !== s.followUpDays) saveSetting('followUpDays', v);
+  };
+  followUp.addEventListener('change', commitFollowUp);
+  followUp.addEventListener('blur', commitFollowUp);
+  body.append(
+    settingRow(
+      'Follow up after (days)',
+      'Applications still at “applied” after this long are flagged in In Progress.',
+      followUp
+    )
+  );
+
+  // --- muted companies ---
+  body.append(el('div', 'set-head', 'Muted companies'));
+  if (!state.muted.length) {
+    body.append(el('div', 'note', 'None. Mute a company from a listing’s detail screen.'));
+  } else {
+    for (const m of state.muted) {
+      const row = el('div', 'set-row');
+      row.append(el('div', 'set-label', m.name));
+      const un = el('button', 'chip', 'Unmute');
+      un.addEventListener('click', () => {
+        window.api
+          .unmuteCompany(m.id)
+          .then((list) => {
+            state.muted = list;
+            render();
+          })
+          .catch((e) => {
+            state.error = e.message;
+            render();
+          });
+      });
+      row.append(un);
+      body.append(row);
+    }
+  }
 
   // --- window ---
   body.append(el('div', 'set-head', 'Window'));
@@ -1247,9 +1586,19 @@ function render() {
     tabs: screenTabs,
     triage: screenTriage,
     settings: screenSettings,
+    search: screenSearch,
   };
   const build = screens[state.mode] ?? screenList;
   app.replaceChildren(build());
+
+  if (state.toast) {
+    const t = el('div', 'toast');
+    t.append(el('span', 'toast-label', state.toast.label));
+    const undo = el('button', 'toast-undo', 'Undo');
+    undo.addEventListener('click', () => state.toast?.undoFn());
+    t.append(undo);
+    app.append(t);
+  }
 }
 
 // ---------- wiring ----------
