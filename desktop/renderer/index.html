@@ -183,16 +183,25 @@
     .strip-cell.on { background: var(--acc); color: var(--onacc); }
     .strip-cell.on:hover { background: var(--acc); }
 
+    /* Outer row never scrolls — the + stays pinned on the right while the
+       tab strip inside it overflows. */
     .tabs {
       display: flex;
       align-items: stretch;
       gap: 0;
       border-top: 1px solid var(--rule);
-      overflow-x: auto;
       flex-shrink: 0;
+      min-width: 0;
+    }
+    .tabs-scroll {
+      display: flex;
+      align-items: stretch;
+      flex: 1;
+      min-width: 0;
+      overflow-x: auto;
       scrollbar-width: none;
     }
-    .tabs::-webkit-scrollbar { height: 0; }
+    .tabs-scroll::-webkit-scrollbar { height: 0; }
     .tab {
       padding: 6px 9px;
       font-size: 9px;
@@ -206,12 +215,12 @@
     .tab:hover { color: var(--ink); }
     .tab.on { color: var(--acc); border-bottom-color: var(--acc); }
     .tab-add {
-      margin-left: auto;
       padding: 6px 9px;
       color: var(--acc);
       display: inline-flex;
       align-items: center;
       flex-shrink: 0;
+      border-left: 1px solid var(--rule);
     }
 
     /* ---------------- listing rows ---------------- */

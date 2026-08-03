@@ -553,7 +553,12 @@ function screenList() {
   screen.append(strip);
 
   // Role tabs
+  // The scrolling strip and the + live side by side: tabs overflow inside
+  // .tabs-scroll while + stays pinned and always reachable. The wheel maps
+  // to horizontal scroll, since the scrollbar is hidden and a mouse has no
+  // other way to reach off-screen tabs.
   const tabs = el('div', 'tabs');
+  const tabStrip = el('div', 'tabs-scroll');
   const mkTab = (id, label) => {
     const t = el('button', 'tab' + (state.activeTab === id ? ' on' : ''), label);
     t.addEventListener('click', () => {
@@ -563,17 +568,31 @@ function screenList() {
     });
     return t;
   };
-  tabs.append(mkTab('all', `All · ${rows.length}`));
+  tabStrip.append(mkTab('all', `All · ${rows.length}`));
   for (const s of state.searches) {
     const n = state.listings.filter((l) => viewOf(l) === view && l.search_id === s.id).length;
-    tabs.append(mkTab(s.id, `${s.label} · ${n}`));
+    tabStrip.append(mkTab(s.id, `${s.label} · ${n}`));
   }
+  tabStrip.addEventListener('wheel', (e) => {
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (delta) {
+      e.preventDefault();
+      tabStrip.scrollLeft += delta;
+    }
+  }, { passive: false });
+  tabs.append(tabStrip);
+
   const add = el('button', 'tab-add');
   add.append(icon('plus'));
   add.title = 'New tab';
   add.addEventListener('click', () => go('tabs', { editingSearchId: null }));
   tabs.append(add);
   screen.append(tabs);
+
+  // Keep the active tab in view when it would otherwise sit off-screen.
+  setTimeout(() => {
+    tabStrip.querySelector('.tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, 0);
 
   const err = errorBar();
   if (err) screen.append(err);
