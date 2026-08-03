@@ -130,16 +130,31 @@ function schedulePoll() {
 // until construction succeeds.
 let supabaseClient = null;
 
+// Credentials entered in Settings win over .env files. They live in
+// settings.json, which the app owns and can rewrite — a hand-placed .env is
+// fragile: reinstalling can clear the directory, and there's no way to fix
+// it from inside the app.
+function credentials() {
+  const s = loadSettings();
+  const url = (s.supabaseUrl ?? '').trim() || process.env.SUPABASE_URL;
+  const key = (s.supabaseAnonKey ?? '').trim() || process.env.SUPABASE_ANON_KEY;
+  return { url, key };
+}
+
 function getSupabase() {
   if (supabaseClient) return supabaseClient;
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) loadEnvFiles('retry');
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_ANON_KEY;
+  const { url, key } = credentials();
   if (!url || !key) return null;
   supabaseClient = createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   return supabaseClient;
+}
+
+// Called after credentials change so the next query uses them.
+function resetSupabase() {
+  supabaseClient = null;
 }
 
 let win = null;
@@ -729,6 +744,42 @@ if (!gotLock) {
 
     ipcMain.handle('refresh', () => poll());
     ipcMain.handle('set-mode', (_e, mode) => setMode(mode));
+    // Connection setup from inside the app. The key is never sent back to
+    // the renderer — only whether one is stored and where it came from.
+    ipcMain.handle('get-connection', () => {
+      const s = loadSettings();
+      const fromSettings = !!(s.supabaseUrl && s.supabaseAnonKey);
+      const { url, key } = credentials();
+      return {
+        url: url ?? '',
+        hasKey: !!key,
+        source: fromSettings ? 'settings' : key ? 'env file' : 'none',
+        envPath: loadedEnvFrom,
+        configDir: CONFIG_DIR,
+        connected: !!getSupabase(),
+      };
+    });
+    ipcMain.handle('set-connection', async (_e, { url, key }) => {
+      const cleanUrl = String(url ?? '').trim().replace(/\/+$/, '');
+      const cleanKey = String(key ?? '').trim();
+      if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(cleanUrl)) {
+        throw new Error('URL should look like https://yourproject.supabase.co');
+      }
+      if (cleanKey.length < 20) throw new Error('That key looks too short');
+
+      // Verify before saving, so a typo can't leave the app unusable.
+      const probe = createClient(cleanUrl, cleanKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { error } = await probe.from('job_listings').select('id').limit(1);
+      if (error) throw new Error(`Could not connect: ${error.message}`);
+
+      saveSettings({ supabaseUrl: cleanUrl, supabaseAnonKey: cleanKey });
+      resetSupabase();
+      poll();
+      return { ok: true };
+    });
+
     ipcMain.handle('get-settings', () => ({
       ...getSettings(),
       version: app.getVersion(),

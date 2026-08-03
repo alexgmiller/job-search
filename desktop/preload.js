@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('api', {
   refresh: () => ipcRenderer.invoke('refresh'),
   setMode: (mode) => ipcRenderer.invoke('set-mode', mode),
   getSettings: () => ipcRenderer.invoke('get-settings'),
+  getConnection: () => ipcRenderer.invoke('get-connection'),
+  setConnection: (url, key) => ipcRenderer.invoke('set-connection', { url, key }),
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', { key, value }),
   getTheme: () => ipcRenderer.invoke('get-theme'),
   setTheme: (value) => ipcRenderer.invoke('set-theme', value),

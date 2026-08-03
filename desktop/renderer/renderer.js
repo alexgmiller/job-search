@@ -45,6 +45,7 @@ const state = {
   searchResults: [],
   searchBusy: false,
   muted: [],
+  connection: null,
   importResult: null, // { fileName, method, rows: [{kind,title,content,on}] }
   tailor: null, // { listing, step, text, error }
   error: '',
@@ -456,7 +457,22 @@ function termTags(l) {
 
 function errorBar() {
   if (!state.error) return null;
-  const bar = el('div', 'err', state.error);
+  const bar = el('div', 'err');
+  bar.append(el('span', null, state.error));
+  // A missing-credentials error is fixable in Settings — say so and take
+  // the user there, rather than leaving a dead-end message.
+  if (/SUPABASE_URL|SUPABASE_ANON_KEY|not configured/i.test(state.error)) {
+    const fix = el('button', 'err-fix', 'Open settings');
+    fix.addEventListener('click', (e) => {
+      e.stopPropagation();
+      Promise.all([
+        window.api.getSettings(),
+        window.api.getMuted?.() ?? [],
+        window.api.getConnection?.() ?? null,
+      ]).then(([s, m, c]) => go('settings', { settings: s, muted: m, connection: c }));
+    });
+    bar.append(fix);
+  }
   bar.addEventListener('click', () => {
     state.error = '';
     render();
@@ -524,9 +540,11 @@ function screenList() {
     iconName: 'sliders',
     title: 'Settings',
     onClick: () =>
-      Promise.all([window.api.getSettings(), window.api.getMuted?.() ?? []]).then(([s, m]) =>
-        go('settings', { settings: s, muted: m })
-      ),
+      Promise.all([
+        window.api.getSettings(),
+        window.api.getMuted?.() ?? [],
+        window.api.getConnection?.() ?? null,
+      ]).then(([s, m, c]) => go('settings', { settings: s, muted: m, connection: c })),
   });
 
   const chrome = el('div', 'hdr-actions');
@@ -1348,6 +1366,58 @@ function screenSettings() {
 
   const body = el('div', 'scroll pad');
   body.append(el('div', 'hdr-title', 'Settings'));
+
+  // --- connection ---
+  // Credentials are editable here so a wiped or missing .env can be fixed
+  // from inside the app instead of by hand-placing a file.
+  body.append(el('div', 'set-head', 'Connection'));
+  const conn = state.connection;
+  if (conn) {
+    const status = el('div', 'note');
+    status.textContent = conn.connected
+      ? `Connected · credentials from ${conn.source}`
+      : 'Not connected — enter your Supabase URL and publishable key below.';
+    body.append(status);
+
+    const urlField = el('div', 'field');
+    urlField.append(el('label', 'f-label', 'Supabase URL'));
+    const urlInput = el('input', 'f-input');
+    urlInput.value = conn.url ?? '';
+    urlInput.placeholder = 'https://yourproject.supabase.co';
+    urlField.append(urlInput);
+
+    const keyField = el('div', 'field');
+    keyField.append(el('label', 'f-label', 'Publishable key'));
+    const keyInput = el('input', 'f-input');
+    keyInput.type = 'password';
+    keyInput.placeholder = conn.hasKey ? '•••••••• (stored — type to replace)' : 'sb_publishable_…';
+    keyField.append(keyInput);
+    body.append(urlField, keyField);
+
+    const saveRow = el('div', 'set-row');
+    const msg = el('div', 'note', '');
+    const saveBtn = btn('Save & test', 'btn', {
+      onClick: (e) => {
+        const b = e.currentTarget;
+        b.disabled = true;
+        msg.textContent = 'Testing…';
+        window.api
+          .setConnection(urlInput.value, keyInput.value || undefined)
+          .then(() => window.api.getConnection())
+          .then((c) => {
+            state.connection = c;
+            state.error = '';
+            render();
+          })
+          .catch((err) => {
+            b.disabled = false;
+            msg.textContent = err.message;
+          });
+      },
+    });
+    saveRow.append(msg, saveBtn);
+    body.append(saveRow);
+  }
 
   // --- appearance ---
   body.append(el('div', 'set-head', 'Appearance'));

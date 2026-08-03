@@ -61,7 +61,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Shortlist"
+      "shortcutName": "Shortlist",
+      "deleteAppDataOnUninstall": false
     }
   }
 }
