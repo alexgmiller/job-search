@@ -98,21 +98,26 @@ const ENV_POLL_MINUTES = Math.max(1, Number(process.env.POLL_MINUTES) || 5);
 // Declared above SETTING_DEFAULTS because that object reads DEFAULT_AI_MODEL
 // while the module is evaluating — a `const` further down the file would
 // still be in its temporal dead zone and throw on startup.
+// Costs below are measured per draft on a real listing, not list-price
+// estimates. Haiku is the surprise: it is both the slowest and no cheaper
+// than Sonnet on a bad run, because its thinking budget is fixed and gets
+// spent whether the task needs it or not, while the 5 series thinks
+// adaptively and stops when it's done.
 const AI_MODELS = {
+  'claude-sonnet-5': {
+    label: 'Claude Sonnet 5',
+    note: '~2¢ a draft, ~13s. Best balance — the default.',
+    params: { output_config: { effort: 'medium' } },
+  },
   'claude-haiku-4-5': {
     label: 'Claude Haiku 4.5',
-    note: 'A couple of cents per draft. Good enough for a first draft you edit.',
+    note: '~1–2¢ but slowest (18–40s), and it opens by restating the job title.',
     // Adaptive thinking isn't supported here; Haiku takes an explicit budget.
     params: { thinking: { type: 'enabled', budget_tokens: 4000 } },
   },
-  'claude-sonnet-5': {
-    label: 'Claude Sonnet 5',
-    note: 'Sharper writing, a few cents more.',
-    params: { output_config: { effort: 'medium' } },
-  },
   'claude-opus-5': {
     label: 'Claude Opus 5',
-    note: 'Best prose — specific openings, honest about gaps. ~15¢ per draft.',
+    note: '~3.5¢, fastest. Sharpest openings; worth it for a job you want.',
     params: { output_config: { effort: 'medium' } },
     // Opus 5's classifiers can decline a request outright; a server-side
     // fallback re-runs it on another model inside the same call instead of
@@ -120,7 +125,7 @@ const AI_MODELS = {
     fallback: true,
   },
 };
-const DEFAULT_AI_MODEL = 'claude-haiku-4-5';
+const DEFAULT_AI_MODEL = 'claude-sonnet-5';
 
 function normalizeAiModel(value) {
   return value in AI_MODELS ? value : DEFAULT_AI_MODEL;

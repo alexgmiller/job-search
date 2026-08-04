@@ -52,7 +52,7 @@ const state = {
     followUpDays: 10,
     scoringTarget: 'entry',
     locationWeight: 0,
-    aiModel: 'claude-haiku-4-5',
+    aiModel: 'claude-sonnet-5',
   },
   toast: null, // { label, undoFn }
   followUpsOnly: false,
