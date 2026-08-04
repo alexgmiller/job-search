@@ -23,6 +23,22 @@ if (fs.existsSync(envPath)) {
 const { createClient } = require('@supabase/supabase-js');
 const { matchesLocation, REGION_QUERIES } = require('../shared/locations');
 const { buildScorer } = require('../shared/scoring');
+const { bestSalary, formatSalary } = require('../shared/salary');
+
+// A stated figure beats a modelled one, and either beats nothing. Sources
+// that hand back structured pay are preferred over reading the description,
+// except when the structured value is only the source's own estimate — then
+// a number the employer actually wrote wins.
+function salaryColumns(listing) {
+  const salary = bestSalary({ fields: listing.salaryFields, text: listing.description });
+  if (!salary) return {};
+  return {
+    salary_min: salary.min,
+    salary_max: salary.max,
+    salary_period: salary.period,
+    salary_source: salary.source,
+  };
+}
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -141,6 +157,12 @@ async function fetchJSearch(search) {
           : [j.job_city, j.job_state].filter(Boolean).join(', ') || null,
         url: j.job_apply_link,
         description: j.job_description?.slice(0, 6000) || null,
+        salaryFields: {
+          min: j.job_min_salary,
+          max: j.job_max_salary,
+          period: /hour/i.test(j.job_salary_period ?? '') ? 'hour' : 'year',
+          predicted: false,
+        },
       });
     }
   }
@@ -193,6 +215,11 @@ async function fetchUSAJobs(search) {
       const body = await res.json();
       for (const item of body.SearchResult?.SearchResultItems ?? []) {
         const d = item.MatchedObjectDescriptor ?? {};
+        // Federal postings always state the pay band. RateIntervalCode is
+        // PA (per annum) or PH (per hour); anything else we don't claim to
+        // understand, so it's left unset rather than guessed at.
+        const pay = d.PositionRemuneration?.[0];
+        const interval = pay?.RateIntervalCode;
         results.push({
           company: d.OrganizationName ?? 'US Government',
           role: d.PositionTitle,
@@ -200,6 +227,14 @@ async function fetchUSAJobs(search) {
           url: d.PositionURI,
           description: (d.UserArea?.Details?.JobSummary ?? d.QualificationSummary ?? '')
             .slice(0, 6000) || null,
+          salaryFields: pay && (interval === 'PA' || interval === 'PH')
+            ? {
+                min: pay.MinimumRange,
+                max: pay.MaximumRange,
+                period: interval === 'PH' ? 'hour' : 'year',
+                predicted: false,
+              }
+            : null,
         });
       }
     }
@@ -232,6 +267,15 @@ async function fetchAdzuna(search) {
           location: j.location?.display_name ?? null,
           url: j.redirect_url,
           description: (j.description ?? '').slice(0, 6000) || null,
+          // Adzuna quotes a figure for every job, but most are its own
+          // model's guess rather than the employer's number — flagged here
+          // and kept separate all the way to the UI.
+          salaryFields: {
+            min: j.salary_min,
+            max: j.salary_max,
+            period: 'year',
+            predicted: String(j.salary_is_predicted) === '1',
+          },
         });
       }
     }
@@ -332,7 +376,8 @@ async function main() {
     const search = searches.find((s) => matchesSearch(l, s));
     if (!search) continue;
     seenUrls.add(l.url);
-    rows.push({ ...l, search_id: search.id });
+    const { salaryFields, ...row } = l;
+    rows.push({ ...row, search_id: search.id, ...salaryColumns(l) });
   }
 
   console.log(
@@ -343,20 +388,46 @@ async function main() {
   if (DRY_RUN) {
     for (const r of rows) {
       const label = searches.find((s) => s.id === r.search_id)?.label;
-      console.log(`[${label}] ${r.role} — ${r.company} (${r.location ?? 'n/a'})`);
+      const pay = r.salary_min == null
+        ? ''
+        : ` [${formatSalary({ min: r.salary_min, max: r.salary_max, period: r.salary_period, source: r.salary_source })}` +
+          ` ${r.salary_source}]`;
+      console.log(`[${label}] ${r.role} — ${r.company} (${r.location ?? 'n/a'})${pay}`);
     }
-    console.log('\nDry run — nothing inserted.');
+    const paid = rows.filter((r) => r.salary_min != null);
+    const posted = paid.filter((r) => r.salary_source === 'posted');
+    console.log(
+      `\n${paid.length}/${rows.length} carry a salary ` +
+        `(${posted.length} posted, ${paid.length - posted.length} estimated).`
+    );
+    console.log('Dry run — nothing inserted.');
     return;
   }
 
   // ignoreDuplicates: existing urls are skipped, not updated — so a listing
   // you've already marked seen never comes back.
-  const { data: inserted, error } = await supabase
-    .from('job_listings')
-    .upsert(rows, { onConflict: 'url', ignoreDuplicates: true })
-    .select('id, company, role, location, description');
+  const insert = (payload) =>
+    supabase
+      .from('job_listings')
+      .upsert(payload, { onConflict: 'url', ignoreDuplicates: true })
+      .select('id, company, role, location, description');
+
+  let { data: inserted, error } = await insert(rows);
+  // Degrade gracefully when migration-9 hasn't been run: drop the salary
+  // columns and insert the listings anyway rather than losing the run.
+  if (error && /salary|PGRST204/i.test(error.message ?? '')) {
+    console.warn('salary columns missing — run supabase/migration-9-salary.sql. Inserting without them.');
+    const stripped = rows.map(({ salary_min, salary_max, salary_period, salary_source, ...r }) => r);
+    ({ data: inserted, error } = await insert(stripped));
+  }
   if (error) throw new Error(`insert failed: ${error.message}`);
-  console.log(`${inserted?.length ?? 0} new listings inserted.`);
+
+  const paid = rows.filter((r) => r.salary_min != null);
+  const posted = paid.filter((r) => r.salary_source === 'posted');
+  console.log(
+    `${inserted?.length ?? 0} new listings inserted. ` +
+      `${paid.length}/${rows.length} carry a salary (${posted.length} posted, ${paid.length - posted.length} estimated).`
+  );
 
   if (inserted?.length) await scoreListings(inserted);
 }

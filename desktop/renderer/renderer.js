@@ -38,6 +38,8 @@ const state = {
   searches: [],
   profile: [],
   locationFilter: '',
+  minSalary: 0, // annual dollars; 0 = off
+  postedSalaryOnly: false,
   activeRegions: new Set(),
   editingSearchId: null,
   theme: 'system',
@@ -224,6 +226,23 @@ function applyScoring() {
   }
 }
 
+// ---------- salary ----------
+// The four stored columns as the shape shared/salary.js works in.
+function salaryOf(l) {
+  if (l.salary_min == null && l.salary_max == null) return null;
+  const min = Number(l.salary_min ?? l.salary_max);
+  const max = Number(l.salary_max ?? l.salary_min);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  return {
+    min,
+    max,
+    period: l.salary_period === 'hour' ? 'hour' : 'year',
+    source: l.salary_source === 'estimated' ? 'estimated' : 'posted',
+  };
+}
+
+const money = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
+
 // ---------- derived data ----------
 function viewOf(l) {
   if (l.status) return 'progress';
@@ -242,6 +261,20 @@ function inView(view) {
   if (state.locationFilter) {
     const f = state.locationFilter.toLowerCase();
     rows = rows.filter((l) => (l.location ?? '').toLowerCase().includes(f));
+  }
+  if (state.postedSalaryOnly) {
+    rows = rows.filter((l) => salaryOf(l)?.source === 'posted');
+  }
+  if (state.minSalary > 0) {
+    // Only a figure the employer actually posted can rule a listing out.
+    // A source's model estimate is not evidence about what the job pays, and
+    // a listing with no salary at all isn't known to pay badly — dropping
+    // either would hide good roles on the strength of missing data.
+    rows = rows.filter((l) => {
+      const s = salaryOf(l);
+      if (!s || s.source !== 'posted') return true;
+      return window.JobSalary.annualize(s).max >= state.minSalary;
+    });
   }
   if (view === 'progress') {
     if (state.followUpsOnly) rows = rows.filter(followUpDue);
@@ -752,6 +785,15 @@ function listRow(l, view) {
   const sub = el('div', 'row-sub');
   if (view === 'progress' && followUpDue(l)) sub.append(el('span', 'row-due', 'Follow up'));
   sub.append(document.createTextNode([l.company, l.location].filter(Boolean).join(' · ')));
+  const pay = salaryOf(l);
+  if (pay) {
+    sub.append(
+      document.createTextNode(' · '),
+      // Estimates are muted and prefixed with ~ so they never read as the
+      // employer's own figure at a glance.
+      el('span', 'row-pay' + (pay.source === 'estimated' ? ' est' : ''), window.JobSalary.formatSalary(pay))
+    );
+  }
   text.append(el('div', 'row-role', l.role), sub);
 
   const acts = el('div', 'row-acts');
@@ -857,6 +899,27 @@ function screenDetail() {
   );
   head.append(left, right);
   body.append(head);
+
+  // Where the number came from is as important as the number. An estimate is
+  // the aggregator's model, not the employer, and saying so plainly is the
+  // difference between useful context and a fabricated fact.
+  const pay = salaryOf(l);
+  if (pay) {
+    const band = el('div', 'd-pay' + (pay.source === 'estimated' ? ' est' : ''));
+    band.append(el('span', 'd-pay-val', window.JobSalary.formatSalary(pay)));
+    band.append(
+      el(
+        'span',
+        'd-pay-note',
+        pay.source === 'estimated'
+          ? 'estimated by the job board, not posted by the employer'
+          : pay.period === 'hour'
+            ? `posted · about ${money(window.JobSalary.annualize(pay).min)}/yr at 40 h/week`
+            : 'posted in the listing'
+      )
+    );
+    body.append(band);
+  }
 
   const bars = scoreBars(l, { thick: true });
   if (bars) body.append(bars);
@@ -1225,6 +1288,55 @@ function screenImport() {
   return screen;
 }
 
+// Pay floor, plus how much of the list it can actually speak to. Salary
+// coverage is thin and uneven, so the counts are stated outright — a filter
+// that silently rests on missing data is worse than no filter.
+const SALARY_STEPS = [0, 50000, 70000, 90000, 120000];
+
+function salaryFilter() {
+  const wrap = el('div', 'field');
+  wrap.append(el('label', 'f-label', 'Pay'));
+
+  const all = state.listings;
+  const known = all.filter((l) => salaryOf(l));
+  const posted = known.filter((l) => salaryOf(l).source === 'posted');
+
+  const chips = el('div', 'chips');
+  for (const step of SALARY_STEPS) {
+    const chip = el('button', 'chip' + (state.minSalary === step ? ' on' : ''), step ? `${step / 1000}k+` : 'Any');
+    chip.addEventListener('click', () => {
+      state.minSalary = step;
+      render();
+    });
+    chips.append(chip);
+  }
+  wrap.append(chips);
+
+  const only = el('div', 'chips');
+  const toggle = el('button', 'chip' + (state.postedSalaryOnly ? ' on' : ''), 'Posted salary only');
+  toggle.addEventListener('click', () => {
+    state.postedSalaryOnly = !state.postedSalaryOnly;
+    render();
+  });
+  only.append(toggle);
+  wrap.append(only);
+
+  const note = el('div', 'note');
+  if (state.settings.salaryColumns === false) {
+    note.textContent =
+      'No salary data yet — run supabase/migration-9-salary.sql, then the next ' +
+      'scrape records what each listing pays.';
+  } else {
+    note.textContent =
+      `${posted.length} of ${all.length} loaded listings post a salary` +
+      (known.length > posted.length ? `, ${known.length - posted.length} more carry a board estimate. ` : '. ') +
+      'A pay floor only rules out listings with a posted figure — an estimate isn’t the employer’s number, ' +
+      'and a listing with no salary isn’t known to pay badly.';
+  }
+  wrap.append(note);
+  return wrap;
+}
+
 // ---------- screen: tab editor / filters ----------
 function screenTabs() {
   const editing = state.searches.find((s) => s.id === state.editingSearchId);
@@ -1268,6 +1380,8 @@ function screenTabs() {
     });
     f2.append(input);
     body.append(f2);
+
+    body.append(salaryFilter());
     screen.append(body);
 
     const foot = el('div', 'foot');
@@ -1276,6 +1390,8 @@ function screenTabs() {
         onClick: () => {
           state.activeRegions.clear();
           state.locationFilter = '';
+          state.minSalary = 0;
+          state.postedSalaryOnly = false;
           render();
         },
       }),

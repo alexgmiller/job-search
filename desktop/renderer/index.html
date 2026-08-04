@@ -279,6 +279,26 @@
     }
     .row-acts { display: flex; gap: 4px; align-self: center; }
 
+    /* Pay. A posted figure is the employer's own and reads at full weight;
+       an estimate is the board's guess and is deliberately quieter. */
+    .row-pay { font-weight: 700; color: var(--ink); }
+    .row-pay.est { font-weight: 400; color: var(--mute); font-style: italic; }
+
+    .d-pay {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 10px 0 2px;
+      padding: 8px 10px;
+      background: var(--surf);
+      border-left: 2px solid var(--ink);
+    }
+    .d-pay.est { border-left-color: var(--rule); }
+    .d-pay-val { font-size: 15px; font-weight: 800; letter-spacing: -.01em; }
+    .d-pay.est .d-pay-val { font-weight: 600; color: var(--mute); }
+    .d-pay-note { font-size: 9.5px; color: var(--mute); }
+
     /* Expanded row detail, indented to the text column. */
     .exp {
       margin-left: 39px;
@@ -739,6 +759,7 @@
   <!-- after locations.js: the scorer reads window.JobLocations for the
        location grade when it can't require() a sibling module. -->
   <script src="../../shared/scoring.js"></script>
+  <script src="../../shared/salary.js"></script>
   <script src="../../shared/profile-fields.js"></script>
   <script src="renderer.js"></script>
 </body>

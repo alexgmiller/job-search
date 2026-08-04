@@ -54,6 +54,47 @@ The scraper writes `fit_score` using the `entry` default; the app always
 re-derives what it displays, so the two never disagree. Rows scored before
 the breakdown existed keep their stored score.
 
+### Salary
+
+Every source that returns pay as a structured field is now read for it
+(Adzuna, USAJobs, JSearch), and anything else is parsed out of the
+description text. A dry run over the live sources records a salary for
+**~90%** of matches.
+
+The distinction the app cares about is **posted vs estimated**. Adzuna
+returns a figure for every job it has, but most are its own model's guess
+(`salary_is_predicted`), arriving as a single point rather than a range.
+Presenting that as the salary would be showing an invented number as fact,
+so it's stored as `salary_source = 'estimated'`, displayed muted with a `~`,
+and never used to filter a listing out. Only a figure the employer actually
+posted can exclude anything — and a listing with no salary isn't known to
+pay badly, so it stays visible too.
+
+Text parsing is deliberately strict, because a wrong salary is worse than a
+blank one. Postings are full of decoys — "$124 trillion of assets", "$5.8B
+valuation", "401(k) match up to $5,000" — so a figure has to be inside a
+plausible band *and* in a pay context to count. Measured on the stored
+corpus: 23/23 hand-written cases, 796 of 1,034 `$`-containing descriptions
+parsed, 0 false positives in a 25-row hand audit, and every rejection
+checked was a decoy.
+
+`salary_min`/`salary_max` are stored in whole units of `salary_period`, so
+an hourly role keeps the $24.50 the employer quoted; the app annualises at
+2080 h/yr when comparing against a pay floor.
+
+Requires `supabase/migration-9-salary.sql`. Until it's run, the app and
+scraper both notice the columns are missing and carry on without them.
+
+```sh
+cd scraper
+node backfill-salary.js --dry-run   # what it would extract from stored text
+node backfill-salary.js             # write it
+```
+
+The backfill only sees stored descriptions, so it reaches the postings that
+write pay into the text; rows from sources that return it structurally pick
+it up the next time they're scraped.
+
 To score listings that were found before you filled in your profile:
 
 ```sh

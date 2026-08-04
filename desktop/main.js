@@ -245,11 +245,39 @@ async function fetchListings() {
   // Newest 500 keeps the payload bounded once dismissed rows pile up.
   const { data, error } = await getSupabase()
     .from('job_listings')
-    .select('id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason, fit_parts')
+    .select(listingColumns())
     .order('found_at', { ascending: false })
     .limit(500);
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (retryWithoutSalary(error)) return fetchListings();
+    throw new Error(error.message);
+  }
   return data ?? [];
+}
+
+// Salary lives behind migration-9. Selecting a column that doesn't exist is
+// a hard PostgREST error, so an un-migrated database would show an empty,
+// broken list rather than a list without salary — the app drops the columns
+// and carries on instead. One failed query per launch, then it's cached.
+let hasSalaryColumns = true;
+
+const LISTING_COLUMNS =
+  'id, company, role, location, url, found_at, seen, search_id, status, ' +
+  'applied_at, notes, dismissed_at, fit_score, fit_reason, fit_parts';
+const SALARY_COLUMNS = 'salary_min, salary_max, salary_period, salary_source';
+
+function listingColumns(extra = '') {
+  return [LISTING_COLUMNS, hasSalaryColumns ? SALARY_COLUMNS : '', extra]
+    .filter(Boolean)
+    .join(', ');
+}
+
+function retryWithoutSalary(error) {
+  if (!hasSalaryColumns) return false;
+  if (!/salary/i.test(error?.message ?? '')) return false;
+  console.warn('salary columns absent — run supabase/migration-9-salary.sql');
+  hasSalaryColumns = false;
+  return true;
 }
 
 // PostgREST reports an unknown column as PGRST204 / "column ... does not
@@ -801,6 +829,9 @@ if (!gotLock) {
 
     ipcMain.handle('get-settings', () => ({
       ...getSettings(),
+      // So the pay filter can say "run the migration" rather than sitting
+      // there looking broken when no listing has a salary.
+      salaryColumns: hasSalaryColumns,
       version: app.getVersion(),
       configPath: loadedEnvFrom ?? '(no .env found)',
       userDataPath: app.getPath('userData'),
@@ -843,17 +874,21 @@ if (!gotLock) {
     ipcMain.handle('get-searches', () => fetchSearches());
     // Descriptions are up to 6k chars, so they're fetched per listing when
     // the detail view opens rather than on every poll.
-    ipcMain.handle('get-listing', async (_e, id) => {
-      if (!getSupabase()) throw new Error('Supabase not configured');
+    const getListing = async (id) => {
       const { data, error } = await getSupabase()
         .from('job_listings')
-        .select(
-          'id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason, fit_parts, description'
-        )
+        .select(listingColumns('description'))
         .eq('id', id)
         .single();
-      if (error) throw new Error(error.message);
+      if (error) {
+        if (retryWithoutSalary(error)) return getListing(id);
+        throw new Error(error.message);
+      }
       return data;
+    };
+    ipcMain.handle('get-listing', async (_e, id) => {
+      if (!getSupabase()) throw new Error('Supabase not configured');
+      return getListing(id);
     });
     ipcMain.handle('add-search', async (_e, { label, keywords, locations }) => {
       if (!getSupabase()) throw new Error('Supabase not configured');
@@ -912,21 +947,24 @@ if (!gotLock) {
 
     // Server-side search across the whole table — the renderer only holds
     // the newest 500, which is exactly when search matters.
+    const searchListings = async (pat) => {
+      const { data, error } = await getSupabase()
+        .from('job_listings')
+        .select(listingColumns())
+        .or(`role.ilike.${pat},company.ilike.${pat},location.ilike.${pat}`)
+        .order('fit_score', { ascending: false, nullsFirst: false })
+        .limit(100);
+      if (error) {
+        if (retryWithoutSalary(error)) return searchListings(pat);
+        throw new Error(error.message);
+      }
+      return data ?? [];
+    };
     ipcMain.handle('search-listings', async (_e, q) => {
       if (!getSupabase()) throw new Error('Supabase not configured');
       const term = String(q ?? '').replace(/[,()%_]/g, ' ').trim();
       if (term.length < 2) return [];
-      const pat = `%${term}%`;
-      const { data, error } = await getSupabase()
-        .from('job_listings')
-        .select(
-          'id, company, role, location, url, found_at, seen, search_id, status, applied_at, notes, dismissed_at, fit_score, fit_reason, fit_parts'
-        )
-        .or(`role.ilike.${pat},company.ilike.${pat},location.ilike.${pat}`)
-        .order('fit_score', { ascending: false, nullsFirst: false })
-        .limit(100);
-      if (error) throw new Error(error.message);
-      return data ?? [];
+      return searchListings(`%${term}%`);
     });
 
     // Company mute list. Tolerate migration-8 being absent on reads.
