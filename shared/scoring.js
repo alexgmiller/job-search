@@ -84,8 +84,7 @@ function yearsRequired(text = '') {
   return max;
 }
 
-// Multipliers for an early-career candidate. Change these (or pass your own
-// via buildScorer's `seniorityWeights`) if you're targeting senior roles.
+// Multipliers for an early-career candidate.
 const EARLY_CAREER_WEIGHTS = {
   junior: 1.25,
   mid: 1.0,
@@ -93,6 +92,100 @@ const EARLY_CAREER_WEIGHTS = {
   staff: 0.28,
   executive: 0.15,
 };
+
+// Who you're aiming at. The multipliers say which titles get boosted or
+// discounted; yearsTolerance says how many years of required experience is
+// unremarkable for that target, past which the posting is discounted further.
+// `entry` reproduces the original hardcoded behaviour exactly, so leaving the
+// setting alone changes nothing.
+const TARGET_PRESETS = {
+  entry: {
+    label: 'Entry-level',
+    hint: 'Interns, associates and junior roles rank highest.',
+    weights: EARLY_CAREER_WEIGHTS,
+    yearsTolerance: 2,
+  },
+  mid: {
+    label: 'Mid-level',
+    hint: 'Plain “Engineer” / “Analyst” titles rank highest; interns drop.',
+    weights: { junior: 0.85, mid: 1.25, senior: 0.95, staff: 0.5, executive: 0.25 },
+    yearsTolerance: 5,
+  },
+  senior: {
+    label: 'Senior',
+    hint: 'Senior, lead and staff titles rank highest; junior roles drop.',
+    weights: { junior: 0.3, mid: 0.85, senior: 1.25, staff: 1.1, executive: 0.55 },
+    yearsTolerance: 9,
+  },
+  any: {
+    label: 'No preference',
+    hint: 'Rank on skills overlap alone — title and years are ignored.',
+    weights: { junior: 1, mid: 1, senior: 1, staff: 1, executive: 1 },
+    yearsTolerance: 99,
+  },
+};
+
+const DEFAULT_PREFS = { target: 'entry', locationWeight: 0 };
+
+// An explicit years-of-experience bar is a stronger signal than the title,
+// but "8+ years" only disqualifies you relative to what you're aiming at.
+// With the entry tolerance of 2 these thresholds land on 3/5/8 years, which
+// is what the scorer used before the target became configurable.
+function yearsFactor(years, tolerance) {
+  const over = (years ?? 0) - tolerance;
+  if (over >= 6) return 0.4;
+  if (over >= 3) return 0.6;
+  if (over >= 1) return 0.85;
+  return 1;
+}
+
+/** Normalise a loose prefs object into the numbers the scorer needs. */
+function resolvePrefs(prefs) {
+  const p = prefs ?? {};
+  const preset = TARGET_PRESETS[p.target] ?? TARGET_PRESETS[DEFAULT_PREFS.target];
+  const weights = p.seniorityWeights ?? preset.weights;
+  const raw = Number(p.locationWeight);
+  return {
+    weights,
+    maxWeight: Math.max(...Object.values(weights)),
+    yearsTolerance: p.yearsTolerance ?? preset.yearsTolerance,
+    locationWeight: Math.max(0, Math.min(1, Number.isFinite(raw) ? raw : DEFAULT_PREFS.locationWeight)),
+  };
+}
+
+// How much a listing's location grade moves its score. At weight 0 (the
+// default) location is reported but doesn't move the number at all, which is
+// reasonable because the scraper already filters by region; at weight 1 a
+// listing scoring 65 on location keeps only 65% of its score.
+function locationMultiplier(location, locationWeight) {
+  if (!locationWeight) return 1;
+  const loc = typeof location === 'number' ? location : 100;
+  return 1 - locationWeight + locationWeight * (loc / 100);
+}
+
+const clamp100 = (n) => Math.max(0, Math.min(100, Math.round(n)));
+
+/**
+ * Re-derive a listing's score from the breakdown already stored on it, under
+ * a different set of preferences. Term overlap (`parts.skills`) doesn't
+ * depend on who you're targeting — only the multipliers applied to it do — so
+ * the app can re-rank everything it has loaded without re-reading a single
+ * job description.
+ *
+ * @returns {null | {score:number, seniority:number}} null when the listing
+ *   predates the stored breakdown and there's nothing to recompute from.
+ */
+function rescoreFromParts(parts, prefs) {
+  if (!parts || typeof parts !== 'object' || typeof parts.skills !== 'number') return null;
+  if (!parts.level) return null;
+  const p = resolvePrefs(prefs);
+  const factor = (p.weights[parts.level] ?? 1) * yearsFactor(parts.years, p.yearsTolerance);
+  const skills = typeof parts.skillsRaw === 'number' ? parts.skillsRaw : parts.skills;
+  return {
+    score: clamp100(skills * factor * locationMultiplier(parts.location, p.locationWeight)),
+    seniority: clamp100((factor / p.maxWeight) * 100),
+  };
+}
 
 // The location matcher lives in a sibling module. Resolved lazily so this
 // file still loads in a plain <script> context where require() is absent.
@@ -130,14 +223,10 @@ function locationScore(listing, targets) {
   return best;
 }
 
-function seniorityFactor(listing, weights) {
+function seniorityFactor(listing, prefs) {
   const level = seniorityOf(listing.role ?? '');
-  let factor = weights[level] ?? 1;
-  // An explicit years-of-experience bar is a stronger signal than the title.
   const years = yearsRequired(listingText(listing));
-  if (years >= 8) factor *= 0.4;
-  else if (years >= 5) factor *= 0.6;
-  else if (years >= 3) factor *= 0.85;
+  const factor = (prefs.weights[level] ?? 1) * yearsFactor(years, prefs.yearsTolerance);
   return { factor, level, years };
 }
 
@@ -148,10 +237,12 @@ function seniorityFactor(listing, weights) {
  *
  * @param {Array<{title?:string, content?:string}>} profileChunks
  * @param {Array<{role?:string, description?:string}>} corpus
+ * @param {{locationTargets?:string[], target?:string, locationWeight?:number,
+ *   seniorityWeights?:object}} options
  * @returns {null | ((listing) => {score:number, reason:string})}
  */
 function buildScorer(profileChunks, corpus, options = {}) {
-  const weights = options.seniorityWeights ?? EARLY_CAREER_WEIGHTS;
+  const prefs = resolvePrefs(options);
   const profileTerms = terms(
     (profileChunks ?? []).map((c) => `${c.title ?? ''} ${c.content ?? ''}`).join(' ')
   );
@@ -212,18 +303,25 @@ function buildScorer(profileChunks, corpus, options = {}) {
   // Calibrate on seniority-adjusted hits so the adjustment doesn't just
   // squash the whole distribution downward.
   const hits = docs
-    .map((d, i) => rawHit(d).hit * seniorityFactor(listings[i], weights).factor)
+    .map((d, i) => {
+      const l = listings[i];
+      return (
+        rawHit(d).hit *
+        seniorityFactor(l, prefs).factor *
+        locationMultiplier(locationScore(l, options.locationTargets), prefs.locationWeight)
+      );
+    })
     .sort((a, b) => a - b);
   const p99 = hits.length ? hits[Math.min(hits.length - 1, Math.floor(hits.length * 0.99))] : 0;
   const scale = p99 > 0 ? p99 : total;
 
-  const maxWeight = Math.max(...Object.values(weights));
-
   return function score(listing) {
     const jobTerms = terms(listingText(listing));
     const { hit, matched } = rawHit(jobTerms);
-    const { factor, level, years } = seniorityFactor(listing, weights);
-    const value = Math.max(0, Math.min(100, Math.round(((hit * factor) / scale) * 100)));
+    const { factor, level, years } = seniorityFactor(listing, prefs);
+    const location = locationScore(listing, options.locationTargets);
+    const locMul = locationMultiplier(location, prefs.locationWeight);
+    const value = clamp100(((hit * factor * locMul) / scale) * 100);
     matched.sort((a, b) => b[1] - a[1]);
     const top = matched.slice(0, 6).map(([t]) => t);
 
@@ -232,21 +330,27 @@ function buildScorer(profileChunks, corpus, options = {}) {
     else notes.push('No profile terms found');
     if (factor < 1) {
       const why = [];
-      if (weights[level] < 1) why.push(`${level}-level role`);
-      if (years >= 3) why.push(`${years}+ yrs experience`);
+      if (prefs.weights[level] < 1) why.push(`${level}-level role`);
+      if (years > prefs.yearsTolerance) why.push(`${years}+ yrs experience`);
       notes.push(`downweighted (${why.join(', ')})`);
     } else if (factor > 1) {
-      notes.push('boosted (early-career role)');
+      notes.push(`boosted (${level}-level role)`);
     }
 
     // The composite alone doesn't say *why* a listing ranks where it does.
-    // These three are what the UI breaks the score into.
+    // These three are what the UI breaks the score into. `level` and `years`
+    // ride along so the app can re-derive the composite under a different
+    // target without re-reading the description — see rescoreFromParts.
     const parts = {
       // Term overlap before the seniority multiplier is applied.
-      skills: Math.max(0, Math.min(100, Math.round((hit / scale) * 100))),
+      skills: clamp100((hit / scale) * 100),
+      // The same number uncapped, purely so rescoreFromParts stays exact for
+      // the handful of listings that overshoot the calibration ceiling —
+      // capping first and multiplying later would lose their headroom.
+      skillsRaw: Math.round((hit / scale) * 1000) / 10,
       // Seniority suitability: the multiplier as a share of the best case.
-      seniority: Math.max(0, Math.min(100, Math.round((factor / maxWeight) * 100))),
-      location: locationScore(listing, options.locationTargets),
+      seniority: clamp100((factor / prefs.maxWeight) * 100),
+      location,
       terms: top,
       level,
       years,
@@ -256,14 +360,22 @@ function buildScorer(profileChunks, corpus, options = {}) {
   };
 }
 
-const API = {
+// Module-specific name — see the note in locations.js on why a shared `API`
+// binding breaks these files when they load as <script> tags.
+const SCORING_API = {
   terms,
   buildScorer,
   STOPWORDS,
   seniorityOf,
   yearsRequired,
+  yearsFactor,
   locationScore,
+  locationMultiplier,
+  rescoreFromParts,
+  resolvePrefs,
+  TARGET_PRESETS,
+  DEFAULT_PREFS,
   EARLY_CAREER_WEIGHTS,
 };
-if (typeof module !== 'undefined' && module.exports) module.exports = API;
-if (typeof window !== 'undefined') window.JobScoring = API;
+if (typeof module !== 'undefined' && module.exports) module.exports = SCORING_API;
+if (typeof window !== 'undefined') window.JobScoring = SCORING_API;

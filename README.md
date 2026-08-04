@@ -38,11 +38,21 @@ good is this compared to everything else out there".
 
 Keyword overlap alone can't tell a Staff Engineer role from an entry-level
 one — both use the same technology words — so scores are also weighted by
-seniority (title keywords plus any stated years-of-experience bar). The
-default weights target an early-career candidate; change
-`EARLY_CAREER_WEIGHTS` in [shared/scoring.js](shared/scoring.js), or pass
-`{seniorityWeights}` to `buildScorer`, if you're aiming at senior roles.
-Measured on 679 real listings: junior avg 47, mid 26, senior 17, staff 8.
+seniority (title keywords plus any stated years-of-experience bar). Measured
+on 679 real listings: junior avg 47, mid 26, senior 17, staff 8.
+
+Which roles *suit you* is a preference, not a property of the listing, so
+**Settings → Scoring** exposes it: pick a target (entry / mid / senior / no
+preference) and how hard location fit pulls the score down. Every scored row
+stores the breakdown its score was built from — term overlap, title level,
+years required, location grade — and term overlap doesn't depend on who
+you're targeting, so the app re-ranks everything it has loaded from those
+numbers alone. No re-scrape, nothing written back, instantly reversible. A
+preview under the chips shows what the choice does to your actual list.
+
+The scraper writes `fit_score` using the `entry` default; the app always
+re-derives what it displays, so the two never disagree. Rows scored before
+the breakdown existed keep their stored score.
 
 To score listings that were found before you filled in your profile:
 

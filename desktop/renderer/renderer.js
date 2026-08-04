@@ -31,6 +31,9 @@ const state = {
   openRowId: null,
   triageIndex: 0,
   detailListing: null,
+  // As they arrived from Supabase. `listings` is the same rows with fit_score
+  // re-derived under the current scoring preferences.
+  rawListings: [],
   listings: [],
   searches: [],
   profile: [],
@@ -38,7 +41,16 @@ const state = {
   activeRegions: new Set(),
   editingSearchId: null,
   theme: 'system',
-  settings: { accent: 'red', theme: 'system', notifications: true, pollMinutes: 5, openAtLogin: false, followUpDays: 10 },
+  settings: {
+    accent: 'red',
+    theme: 'system',
+    notifications: true,
+    pollMinutes: 5,
+    openAtLogin: false,
+    followUpDays: 10,
+    scoringTarget: 'entry',
+    locationWeight: 0,
+  },
   toast: null, // { label, undoFn }
   followUpsOnly: false,
   searchQuery: '',
@@ -173,6 +185,43 @@ function sourceOf(url = '') {
   if (/lever\.co/.test(url)) return 'Lever';
   if (/greenhouse/.test(url)) return 'Greenhouse';
   return 'Board';
+}
+
+// ---------- scoring preferences ----------
+// The scraper writes fit_score using its own default target, but which roles
+// suit *you* is a preference, not a property of the listing. Every scored row
+// carries the breakdown the score was built from (term overlap, title level,
+// years required, location grade), so changing the target re-ranks everything
+// already loaded with arithmetic alone — no re-scrape, no writes, and it can
+// be changed back. Rows too old to carry a breakdown keep their stored score.
+function scoringPrefs() {
+  return {
+    target: state.settings.scoringTarget ?? 'entry',
+    locationWeight: state.settings.locationWeight ?? 0,
+  };
+}
+
+function rescored(rows, prefs = scoringPrefs()) {
+  const S = window.JobScoring;
+  if (!S) return rows;
+  return rows.map((l) => {
+    const out = S.rescoreFromParts(l.fit_parts, prefs);
+    if (!out) return l;
+    return {
+      ...l,
+      fit_score: out.score,
+      fit_parts: { ...l.fit_parts, seniority: out.seniority },
+    };
+  });
+}
+
+// Called whenever either input changes — new rows, or a changed preference.
+function applyScoring() {
+  state.listings = rescored(state.rawListings);
+  if (state.detailListing) {
+    const fresh = state.listings.find((l) => l.id === state.detailListing.id);
+    if (fresh) state.detailListing = { ...state.detailListing, ...fresh };
+  }
 }
 
 // ---------- derived data ----------
@@ -419,7 +468,7 @@ function openDetail(l) {
     .getListing(l.id)
     .then((full) => {
       if (full && state.detailListing?.id === full.id) {
-        state.detailListing = { ...state.detailListing, ...full };
+        state.detailListing = { ...state.detailListing, ...rescored([full])[0] };
         if (state.mode === 'detail') render();
       }
     })
@@ -1355,7 +1404,11 @@ function runSearch(q) {
       .searchListings(q)
       .then((rows) => {
         if (state.searchQuery !== asked) return; // stale response
-        state.searchResults = rows;
+        // Supabase ranked these by the stored score; re-rank under the
+        // current target so search agrees with the list.
+        state.searchResults = rescored(rows).sort(
+          (a, b) => (b.fit_score ?? -1) - (a.fit_score ?? -1)
+        );
         state.searchBusy = false;
         render();
       })
@@ -1440,6 +1493,10 @@ function saveSetting(key, value) {
     .then((s) => {
       state.settings = { ...state.settings, ...s };
       if (key === 'theme') state.theme = s.theme;
+      if (key === 'scoringTarget' || key === 'locationWeight') {
+        applyScoring();
+        state.searchResults = rescored(state.searchResults);
+      }
       applyAccent();
       render();
     })
@@ -1447,6 +1504,91 @@ function saveSetting(key, value) {
       state.error = e.message;
       render();
     });
+}
+
+// How hard location fit pulls a score down. Three named steps rather than a
+// raw 0–1 slider: the underlying number means nothing to anyone.
+const LOC_STEPS = [
+  [0, 'Off', 'Location is shown but doesn’t move the score.'],
+  [0.35, 'Some', 'A statewide or remote-anywhere match scores a little below a local one.'],
+  [0.7, 'Strong', 'Anything outside your regions drops sharply.'],
+];
+
+// Changing either control re-ranks what's already loaded immediately, so the
+// preview updates on the same click. Nothing is written back to Supabase and
+// nothing is re-scraped — the target is a lens on data you already have.
+function scoringSection() {
+  const out = [el('div', 'set-head', 'Scoring')];
+  const presets = window.JobScoring?.TARGET_PRESETS;
+  if (!presets) {
+    // Only reachable if shared/scoring.js failed to load. An empty section
+    // would read as a broken setting rather than a missing scorer.
+    out.push(el('div', 'note', 'Scorer unavailable — showing scores as last written.'));
+    return out;
+  }
+
+  const target = state.settings.scoringTarget ?? 'entry';
+  out.push(settingRow('Aiming at', presets[target]?.hint, el('div')));
+  const targetChips = el('div', 'chips');
+  for (const [key, preset] of Object.entries(presets)) {
+    const chip = el('button', 'chip' + (target === key ? ' on' : ''), preset.label);
+    chip.addEventListener('click', () => saveSetting('scoringTarget', key));
+    targetChips.append(chip);
+  }
+  out.push(targetChips);
+
+  // Tolerate a stored weight that isn't exactly one of the steps.
+  const lw = state.settings.locationWeight ?? 0;
+  const active = LOC_STEPS.reduce((best, st) =>
+    Math.abs(st[0] - lw) < Math.abs(best[0] - lw) ? st : best
+  );
+  out.push(settingRow('Location emphasis', active[2], el('div')));
+  const locChips = el('div', 'chips');
+  for (const [value, label] of LOC_STEPS) {
+    const chip = el('button', 'chip' + (active[0] === value ? ' on' : ''), label);
+    chip.addEventListener('click', () => saveSetting('locationWeight', value));
+    locChips.append(chip);
+  }
+  out.push(locChips, scoringPreview());
+  return out;
+}
+
+// What the current target actually does to your list. A weights table is
+// abstract; "these three roles now lead, and 12 clear 75" is checkable.
+function scoringPreview() {
+  const box = el('div', 'preview');
+  const open = state.listings.filter((l) => !l.dismissed_at && !l.status);
+  if (!open.length) {
+    box.append(el('div', 'note', 'Nothing loaded yet to preview.'));
+    return box;
+  }
+  const ranked = [...open].sort((a, b) => (b.fit_score ?? -1) - (a.fit_score ?? -1));
+  const strong = ranked.filter((l) => (l.fit_score ?? 0) >= 75).length;
+
+  // The same rows under the untouched defaults, so the delta is visible.
+  const base = rescored(state.rawListings, window.JobScoring?.DEFAULT_PREFS)
+    .filter((l) => !l.dismissed_at && !l.status)
+    .sort((a, b) => (b.fit_score ?? -1) - (a.fit_score ?? -1));
+  const baseTop = new Set(base.slice(0, 10).map((l) => l.id));
+  const changed = ranked.slice(0, 10).filter((l) => !baseTop.has(l.id)).length;
+
+  box.append(
+    el(
+      'div',
+      'preview-head',
+      `${strong} of ${open.length} open listings rate 75+` +
+        (changed ? ` · ${changed} of the top 10 differ from the default target` : '')
+    )
+  );
+  for (const l of ranked.slice(0, 3)) {
+    const row = el('div', 'preview-row');
+    row.append(
+      el('div', `preview-score ${scoreClass(l.fit_score ?? 0)}`, String(l.fit_score ?? '–')),
+      el('div', 'preview-role', `${l.role} — ${l.company}`)
+    );
+    box.append(row);
+  }
+  return box;
 }
 
 function screenSettings() {
@@ -1538,6 +1680,9 @@ function screenSettings() {
   }
   body.append(settingRow('Theme', 'System follows Windows.', el('div')));
   body.append(themeChips);
+
+  // --- scoring ---
+  for (const node of scoringSection()) body.append(node);
 
   // --- behaviour ---
   body.append(el('div', 'set-head', 'Behaviour'));
@@ -1788,13 +1933,10 @@ function render() {
 
 // ---------- wiring ----------
 window.api.onListings((listings) => {
-  state.listings = listings;
+  state.rawListings = listings;
   state.loaded = true;
   state.error = '';
-  if (state.detailListing) {
-    const fresh = listings.find((l) => l.id === state.detailListing.id);
-    if (fresh) state.detailListing = { ...state.detailListing, ...fresh };
-  }
+  applyScoring();
   render();
 });
 
@@ -1820,6 +1962,9 @@ window.api.getSettings?.().then((s) => {
   state.settings = { ...state.settings, ...s };
   state.theme = s.theme ?? 'system';
   applyAccent();
+  // Settings can land after the first poll, so re-derive: the initial pass
+  // used the built-in defaults rather than the stored target.
+  applyScoring();
   render();
 });
 

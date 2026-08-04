@@ -295,6 +295,11 @@ const REGION_QUERIES = {
 
 // Usable from Node (scraper, Electron main) and from a plain <script> tag
 // in the renderer, so both sides share one matcher.
-const API = { parseLocation, matchesLocation, REGION_LABELS, REGION_QUERIES };
-if (typeof module !== 'undefined' && module.exports) module.exports = API;
-if (typeof window !== 'undefined') window.JobLocations = API;
+//
+// The export name is module-specific on purpose. As <script> tags these files
+// share one global lexical scope, so a generic `const API` in two of them is a
+// redeclaration: the second script dies with a SyntaxError and its global is
+// never set — silently, because nothing in the app reads the console.
+const LOCATIONS_API = { parseLocation, matchesLocation, REGION_LABELS, REGION_QUERIES };
+if (typeof module !== 'undefined' && module.exports) module.exports = LOCATIONS_API;
+if (typeof window !== 'undefined') window.JobLocations = LOCATIONS_API;

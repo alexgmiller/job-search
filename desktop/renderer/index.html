@@ -464,6 +464,37 @@
     .set-label { font-size: 11px; font-weight: 600; }
     .set-row .note { margin-top: 2px; }
     .set-num { width: 68px; flex-shrink: 0; text-align: right; }
+
+    /* Scoring preview: what the chosen target does to the actual list. */
+    .preview {
+      margin: 10px 0 4px;
+      padding: 9px 10px;
+      background: var(--surf);
+      border-left: 2px solid var(--acc);
+    }
+    .preview-head {
+      font-size: 9.5px;
+      font-weight: 700;
+      color: var(--ink);
+      margin-bottom: 7px;
+      line-height: 1.5;
+    }
+    .preview-row { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; }
+    .preview-score {
+      font-size: 11px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      min-width: 22px;
+      color: var(--acc);
+    }
+    .preview-score.lo { color: var(--mute); }
+    .preview-role {
+      font-size: 9.5px;
+      color: var(--mute);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .chip.swatch { display: inline-flex; align-items: center; gap: 6px; }
     .chip .dot {
       width: 9px;
@@ -705,6 +736,9 @@
 <body>
   <div id="app"></div>
   <script src="../../shared/locations.js"></script>
+  <!-- after locations.js: the scorer reads window.JobLocations for the
+       location grade when it can't require() a sibling module. -->
+  <script src="../../shared/scoring.js"></script>
   <script src="../../shared/profile-fields.js"></script>
   <script src="renderer.js"></script>
 </body>

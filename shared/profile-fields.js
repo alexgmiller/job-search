@@ -173,7 +173,9 @@ function isEmptyFields(fields) {
   return !Object.values(fields).some((v) => v !== '' && v !== false && v != null);
 }
 
-const API = {
+// Module-specific name — see the note in locations.js on why a shared `API`
+// binding breaks these files when they load as <script> tags.
+const PROFILE_FIELDS_API = {
   FIELD_SCHEMAS,
   deriveTitle,
   deriveContent,
@@ -181,5 +183,5 @@ const API = {
   isEmptyFields,
   formatMonth,
 };
-if (typeof module !== 'undefined' && module.exports) module.exports = API;
-if (typeof window !== 'undefined') window.ProfileFields = API;
+if (typeof module !== 'undefined' && module.exports) module.exports = PROFILE_FIELDS_API;
+if (typeof window !== 'undefined') window.ProfileFields = PROFILE_FIELDS_API;

@@ -97,7 +97,24 @@ const SETTING_DEFAULTS = {
   openAtLogin: false,
   // Days after applying before an application counts as needing a follow-up.
   followUpDays: 10,
+  // Who you're aiming at, and how hard location fit pulls the score down.
+  // The renderer re-derives every listing's score from these — see
+  // rescoreFromParts in shared/scoring.js.
+  scoringTarget: 'entry',
+  locationWeight: 0,
 };
+
+// A settings.json hand-edited to an unknown target would otherwise silently
+// score everything at 1.0; fall back to the default instead.
+function normalizeTarget(value) {
+  const { TARGET_PRESETS } = require('../shared/scoring');
+  return value in TARGET_PRESETS ? value : SETTING_DEFAULTS.scoringTarget;
+}
+
+function normalizeWeight(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : SETTING_DEFAULTS.locationWeight;
+}
 
 function getSettings() {
   const saved = loadSettings();
@@ -107,6 +124,8 @@ function getSettings() {
   }
   out.pollMinutes = Math.min(180, Math.max(1, Number(out.pollMinutes) || ENV_POLL_MINUTES));
   out.followUpDays = Math.min(60, Math.max(1, Number(out.followUpDays) || SETTING_DEFAULTS.followUpDays));
+  out.scoringTarget = normalizeTarget(out.scoringTarget);
+  out.locationWeight = normalizeWeight(out.locationWeight);
   // The OS is the source of truth for launch-at-login, not our own file.
   try {
     out.openAtLogin = app.getLoginItemSettings().openAtLogin;
@@ -804,6 +823,8 @@ if (!gotLock) {
       if (key === 'followUpDays') {
         value = Math.min(60, Math.max(1, Number(value) || SETTING_DEFAULTS.followUpDays));
       }
+      if (key === 'scoringTarget') value = normalizeTarget(value);
+      if (key === 'locationWeight') value = normalizeWeight(value);
       saveSettings({ [key]: value });
       if (key === 'pollMinutes') {
         schedulePoll();

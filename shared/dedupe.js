@@ -121,7 +121,9 @@ function findDuplicatePairs(chunks, t = THRESHOLDS) {
   return pairs.sort((x, y) => y.score - x.score);
 }
 
-const API = {
+// Module-specific name — see the note in locations.js on why a shared `API`
+// binding breaks these files when they load as <script> tags.
+const DEDUPE_API = {
   similarity,
   isExactDuplicate,
   isSimilar,
@@ -130,5 +132,5 @@ const API = {
   chunkTerms,
   THRESHOLDS,
 };
-if (typeof module !== 'undefined' && module.exports) module.exports = API;
-if (typeof window !== 'undefined') window.JobDedupe = API;
+if (typeof module !== 'undefined' && module.exports) module.exports = DEDUPE_API;
+if (typeof window !== 'undefined') window.JobDedupe = DEDUPE_API;
