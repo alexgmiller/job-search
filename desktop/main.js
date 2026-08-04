@@ -89,6 +89,43 @@ const { createClient } = require('@supabase/supabase-js');
 // .env supplies the default; the settings screen can override it per-user.
 const ENV_POLL_MINUTES = Math.max(1, Number(process.env.POLL_MINUTES) || 5);
 
+// Models offered for the tailoring features. The request shape genuinely
+// differs between them — Haiku takes a fixed thinking budget, while the 5
+// series rejects `budget_tokens` outright (400) and thinks adaptively with an
+// effort hint instead — so the shape lives beside the model rather than being
+// duplicated at each call site.
+//
+// Declared above SETTING_DEFAULTS because that object reads DEFAULT_AI_MODEL
+// while the module is evaluating — a `const` further down the file would
+// still be in its temporal dead zone and throw on startup.
+const AI_MODELS = {
+  'claude-haiku-4-5': {
+    label: 'Claude Haiku 4.5',
+    note: 'A couple of cents per draft. Good enough for a first draft you edit.',
+    // Adaptive thinking isn't supported here; Haiku takes an explicit budget.
+    params: { thinking: { type: 'enabled', budget_tokens: 4000 } },
+  },
+  'claude-sonnet-5': {
+    label: 'Claude Sonnet 5',
+    note: 'Sharper writing, a few cents more.',
+    params: { output_config: { effort: 'medium' } },
+  },
+  'claude-opus-5': {
+    label: 'Claude Opus 5',
+    note: 'Best prose — specific openings, honest about gaps. ~15¢ per draft.',
+    params: { output_config: { effort: 'medium' } },
+    // Opus 5's classifiers can decline a request outright; a server-side
+    // fallback re-runs it on another model inside the same call instead of
+    // handing back a refusal. Costs nothing when it never fires.
+    fallback: true,
+  },
+};
+const DEFAULT_AI_MODEL = 'claude-haiku-4-5';
+
+function normalizeAiModel(value) {
+  return value in AI_MODELS ? value : DEFAULT_AI_MODEL;
+}
+
 const SETTING_DEFAULTS = {
   accent: 'red',
   theme: 'system',
@@ -103,7 +140,7 @@ const SETTING_DEFAULTS = {
   scoringTarget: 'entry',
   locationWeight: 0,
   // Model used by the resume and cover-letter tailors.
-  aiModel: 'claude-opus-5',
+  aiModel: DEFAULT_AI_MODEL,
 };
 
 // A settings.json hand-edited to an unknown target would otherwise silently
@@ -450,39 +487,6 @@ async function parseResume(filePath) {
   );
   if (!chunks.length) throw new Error('No profile entries found in that file.');
   return { chunks, method: 'ai' };
-}
-
-// Models offered for the tailoring features. The request shape genuinely
-// differs between them — Haiku takes a fixed thinking budget, while the 5
-// series rejects `budget_tokens` outright (400) and thinks adaptively with an
-// effort hint instead — so the shape lives beside the model rather than being
-// duplicated at each call site.
-const AI_MODELS = {
-  'claude-opus-5': {
-    label: 'Claude Opus 5',
-    note: 'Best writing. ~15¢ per letter.',
-    params: { output_config: { effort: 'medium' } },
-    // Opus 5's classifiers can decline a request outright; a server-side
-    // fallback re-runs it on another model inside the same call instead of
-    // handing back a refusal. Costs nothing when it never fires.
-    fallback: true,
-  },
-  'claude-sonnet-5': {
-    label: 'Claude Sonnet 5',
-    note: 'Close to Opus for a third of the price.',
-    params: { output_config: { effort: 'medium' } },
-  },
-  'claude-haiku-4-5': {
-    label: 'Claude Haiku 4.5',
-    note: 'Cheapest — a couple of cents. Noticeably plainer prose.',
-    // Adaptive thinking isn't supported here; Haiku takes an explicit budget.
-    params: { thinking: { type: 'enabled', budget_tokens: 4000 } },
-  },
-};
-const DEFAULT_AI_MODEL = 'claude-opus-5';
-
-function normalizeAiModel(value) {
-  return value in AI_MODELS ? value : DEFAULT_AI_MODEL;
 }
 
 /**

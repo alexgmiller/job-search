@@ -182,10 +182,18 @@ their gaps ("I don't have SAML or OAuth troubleshooting experience yet, and
 I'd rather say that than imply otherwise") rather than papering over them.
 
 **Settings → Resume & cover letter** picks the model, with the cost stated
-next to each: Opus 5 (best prose, ~15¢), Sonnet 5, or Haiku 4.5 (a couple of
-cents, noticeably plainer). The request shape genuinely differs between them
-— Haiku takes a fixed thinking budget, the 5 series rejects that outright
-and thinks adaptively — so it's handled once, next to the model list.
+next to each. Default is **Haiku 4.5** — a couple of cents a draft, and it
+holds the constraints that matter: no fabricated numbers, right length, names
+the company, states its gaps. Its prose is flatter (it opens with "I'm
+applying for…" and reaches for phrases like "problem-solving mindset" that
+Opus avoids), which is fine for a draft you edit. **Sonnet 5** and
+**Opus 5** are there for an application worth the extra few cents; Opus opens
+on a specific claim rather than the job title and is blunter about gaps.
+
+The request shape genuinely differs between them — Haiku takes a fixed
+thinking budget, the 5 series rejects `budget_tokens` with a 400 and thinks
+adaptively against an effort hint — so it's handled once, beside the model
+list, rather than at each call site.
 
 Profile entries are edited as structured fields (✎ on an entry, or
 double-click its text): job title, company, location, start/end month with
