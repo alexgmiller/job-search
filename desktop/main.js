@@ -962,8 +962,22 @@ if (!gotLock) {
       if (error) throw new Error(error.message);
     });
     ipcMain.handle('get-profile', () => fetchProfile());
-    ipcMain.handle('add-chunk', async (_e, { kind, title, content, fields }) => {
+    ipcMain.handle('add-chunk', async (_e, { kind, title, content, fields, force }) => {
       if (!getSupabase()) throw new Error('Supabase not configured');
+      // Refuse an obvious duplicate rather than silently double-weighting
+      // its terms in the fit score. `force` lets the user override.
+      if (!force) {
+        const dedupe = require('../shared/dedupe');
+        const hit = dedupe.findSimilar({ kind, title, content }, await fetchProfile());
+        if (hit) {
+          const pct = Math.round(hit.score * 100);
+          const err = new Error(
+            `${hit.exact ? 'Identical to' : `${pct}% similar to`} “${hit.match.title}”. Edit that entry instead, or save anyway.`
+          );
+          err.code = 'DUPLICATE';
+          throw err;
+        }
+      }
       const base = { kind, title, content };
       let { error } = await getSupabase()
         .from('profile_chunks')
@@ -997,6 +1011,32 @@ if (!gotLock) {
       );
       if (error) throw new Error(error.message);
       return fetchProfile();
+    });
+
+    // Annotate imported chunks with any existing entry they resemble, so the
+    // review list can arrive with duplicates pre-unchecked.
+    ipcMain.handle('check-duplicates', async (_e, chunks) => {
+      const dedupe = require('../shared/dedupe');
+      const existing = await fetchProfile();
+      return (chunks ?? []).map((c) => {
+        const hit = dedupe.findSimilar(c, existing);
+        return hit
+          ? { similarTo: hit.match.title, score: Math.round(hit.score * 100), exact: hit.exact }
+          : null;
+      });
+    });
+
+    // Overlapping pairs already stored, strongest first.
+    ipcMain.handle('find-duplicates', async () => {
+      const dedupe = require('../shared/dedupe');
+      const pairs = dedupe.findDuplicatePairs(await fetchProfile());
+      return pairs.map((p) => ({
+        a: { id: p.a.id, kind: p.a.kind, title: p.a.title, content: p.a.content },
+        b: { id: p.b.id, kind: p.b.kind, title: p.b.title, content: p.b.content },
+        score: Math.round(p.score * 100),
+        exact: p.exact,
+        shared: p.shared.slice(0, 8),
+      }));
     });
     ipcMain.handle('update-chunk', async (_e, { id, kind, title, content, fields }) => {
       if (!getSupabase()) throw new Error('Supabase not configured');

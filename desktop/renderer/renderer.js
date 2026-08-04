@@ -46,6 +46,7 @@ const state = {
   searchBusy: false,
   muted: [],
   connection: null,
+  dupPairs: null,
   importResult: null, // { fileName, method, rows: [{kind,title,content,on}] }
   tailor: null, // { listing, step, text, error }
   error: '',
@@ -942,7 +943,68 @@ function screenProfile() {
     btn('Import resume', 'btn btn-lg', { iconName: 'file', onClick: () => runImport() })
   );
   top.append(grid);
+
+  // Duplicate sweep over what's already stored.
+  const dupRow = el('div', 'grid2');
+  dupRow.style.marginTop = '6px';
+  dupRow.append(
+    btn(state.dupPairs ? 'Re-check duplicates' : 'Find duplicates', 'btn btn-lg', {
+      iconName: 'search',
+      onClick: (e) => {
+        const b = e.currentTarget;
+        b.disabled = true;
+        window.api
+          .findDuplicates()
+          .then((pairs) => {
+            state.dupPairs = pairs;
+            render();
+          })
+          .catch((err) => {
+            state.error = err.message;
+            render();
+          });
+      },
+    })
+  );
+  top.append(dupRow);
   body.append(top);
+
+  if (state.dupPairs) {
+    if (!state.dupPairs.length) {
+      body.append(el('div', 'note', 'No duplicate or overlapping entries found.'));
+    } else {
+      for (const p of state.dupPairs) {
+        const card = el('div', 'dup-card');
+        card.append(
+          el('div', 'dup-head', p.exact ? 'Identical entries' : `${p.score}% overlap`)
+        );
+        for (const side of [p.a, p.b]) {
+          const line = el('div', 'dup-side');
+          line.append(el('span', 'tag tag-quiet', side.kind), el('span', 'chunk-title', side.title));
+          const del = iconBtn('trash', {
+            title: 'Delete this entry',
+            onClick: () => {
+              if (!confirm(`Delete “${side.title}”?`)) return;
+              window.api.deleteChunk(side.id).then((prof) => {
+                state.profile = prof;
+                // Drop any pair that referenced the deleted entry.
+                state.dupPairs = (state.dupPairs ?? []).filter(
+                  (q) => q.a.id !== side.id && q.b.id !== side.id
+                );
+                render();
+              });
+            },
+          });
+          line.append(del);
+          card.append(line);
+        }
+        if (p.shared?.length) {
+          card.append(el('div', 'dup-note', `Shared terms: ${p.shared.join(', ')}`));
+        }
+        body.append(card);
+      }
+    }
+  }
 
   for (const c of state.profile) {
     const row = el('div', 'chunk');
@@ -973,16 +1035,24 @@ function addChunkPrompt() {
   if (!content) return;
   fields.role = title;
   fields.bullets = content;
-  window.api
-    .addChunk({ kind, title, content, fields: PF ? fields : undefined })
-    .then((p) => {
-      state.profile = p;
-      render();
-    })
-    .catch((e) => {
-      state.error = e.message;
-      render();
-    });
+  const save = (force) =>
+    window.api
+      .addChunk({ kind, title, content, fields: PF ? fields : undefined, force })
+      .then((p) => {
+        state.profile = p;
+        state.error = '';
+        render();
+      })
+      .catch((e) => {
+        // A duplicate is a question, not a failure — offer the override.
+        if (/similar to|Identical to/i.test(e.message)) {
+          if (confirm(`${e.message}\n\nAdd it anyway?`)) return save(true);
+          return;
+        }
+        state.error = e.message;
+        render();
+      });
+  save(false);
 }
 
 function editChunkPrompt(c) {
@@ -1008,12 +1078,19 @@ function runImport() {
     .importResume()
     .then((result) => {
       if (!result) return;
-      state.importResult = {
-        fileName: result.fileName,
-        method: result.method,
-        rows: result.chunks.map((c) => ({ ...c, on: c.kind !== 'other' })),
-      };
-      go('import');
+      // Compare against the stored profile before showing the review list,
+      // so anything already present arrives unchecked and labelled.
+      return (window.api.checkDuplicates?.(result.chunks) ?? Promise.resolve([])).then((dupes) => {
+        state.importResult = {
+          fileName: result.fileName,
+          method: result.method,
+          rows: result.chunks.map((c, i) => {
+            const dup = dupes?.[i] ?? null;
+            return { ...c, dup, on: !dup && c.kind !== 'other' };
+          }),
+        };
+        go('import');
+      });
     })
     .catch((e) => {
       state.error = `Import failed: ${e.message}`;
@@ -1035,7 +1112,14 @@ function screenImport() {
   const top = el('div', 'pad');
   top.append(el('div', 'hdr-title', 'Review import'));
   top.append(
-    el('div', 'sub-line', `${imp.fileName} · ${imp.rows.length} entries found. Nothing is saved until you confirm.`)
+    el(
+      'div',
+      'sub-line',
+      `${imp.fileName} · ${imp.rows.length} entries found. Nothing is saved until you confirm.` +
+        (imp.rows.filter((r) => r.dup).length
+          ? ` ${imp.rows.filter((r) => r.dup).length} look like entries you already have — unchecked below.`
+          : '')
+    )
   );
   body.append(top);
 
@@ -1049,7 +1133,19 @@ function screenImport() {
     head.style.gap = '7px';
     head.style.alignItems = 'center';
     head.append(el('span', 'tag tag-quiet', r.kind), el('span', 'chunk-title', r.title));
-    right.append(head, el('div', 'chunk-text', r.content));
+    right.append(head);
+    if (r.dup) {
+      right.append(
+        el(
+          'div',
+          'dup-note',
+          r.dup.exact
+            ? `Already in your profile — “${r.dup.similarTo}”`
+            : `${r.dup.score}% similar to “${r.dup.similarTo}”`
+        )
+      );
+    }
+    right.append(el('div', 'chunk-text', r.content));
     row.append(box, right);
     row.addEventListener('click', () => {
       imp.rows[i].on = !imp.rows[i].on;

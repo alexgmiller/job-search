@@ -601,6 +601,38 @@
     }
     .detail-mute:hover { color: var(--acc7); }
 
+    /* ---------------- duplicate detection ---------------- */
+    .dup-note {
+      font-size: 8.5px;
+      font-weight: 800;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--acc7);
+      margin: 3px 0 4px;
+      line-height: 1.4;
+    }
+    .dup-card {
+      border: 1px solid var(--acc);
+      padding: 9px 10px;
+      margin-bottom: 8px;
+    }
+    .dup-head {
+      font-size: 8.5px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--acc7);
+      margin-bottom: 7px;
+    }
+    .dup-side {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 0;
+      border-top: 1px solid var(--rule);
+    }
+    .dup-card .dup-note { margin-top: 7px; text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--mute); }
+
     /* ---------------- misc ---------------- */
     .empty { color: var(--mute); font-size: 9.5px; text-align: center; padding: 40px 24px; line-height: 1.6; }
     .err {

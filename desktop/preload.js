@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('api', {
   setNotes: (id, notes) => ipcRenderer.invoke('set-notes', { id, notes }),
   getProfile: () => ipcRenderer.invoke('get-profile'),
   addChunk: (chunk) => ipcRenderer.invoke('add-chunk', chunk),
+  checkDuplicates: (chunks) => ipcRenderer.invoke('check-duplicates', chunks),
+  findDuplicates: () => ipcRenderer.invoke('find-duplicates'),
   importResume: () => ipcRenderer.invoke('import-resume'),
   addChunks: (chunks) => ipcRenderer.invoke('add-chunks', chunks),
   updateChunk: (chunk) => ipcRenderer.invoke('update-chunk', chunk),
