@@ -102,6 +102,8 @@ const SETTING_DEFAULTS = {
   // rescoreFromParts in shared/scoring.js.
   scoringTarget: 'entry',
   locationWeight: 0,
+  // Model used by the resume and cover-letter tailors.
+  aiModel: 'claude-opus-5',
 };
 
 // A settings.json hand-edited to an unknown target would otherwise silently
@@ -126,6 +128,7 @@ function getSettings() {
   out.followUpDays = Math.min(60, Math.max(1, Number(out.followUpDays) || SETTING_DEFAULTS.followUpDays));
   out.scoringTarget = normalizeTarget(out.scoringTarget);
   out.locationWeight = normalizeWeight(out.locationWeight);
+  out.aiModel = normalizeAiModel(out.aiModel);
   // The OS is the source of truth for launch-at-login, not our own file.
   try {
     out.openAtLogin = app.getLoginItemSettings().openAtLogin;
@@ -449,6 +452,110 @@ async function parseResume(filePath) {
   return { chunks, method: 'ai' };
 }
 
+// Models offered for the tailoring features. The request shape genuinely
+// differs between them — Haiku takes a fixed thinking budget, while the 5
+// series rejects `budget_tokens` outright (400) and thinks adaptively with an
+// effort hint instead — so the shape lives beside the model rather than being
+// duplicated at each call site.
+const AI_MODELS = {
+  'claude-opus-5': {
+    label: 'Claude Opus 5',
+    note: 'Best writing. ~15¢ per letter.',
+    params: { output_config: { effort: 'medium' } },
+    // Opus 5's classifiers can decline a request outright; a server-side
+    // fallback re-runs it on another model inside the same call instead of
+    // handing back a refusal. Costs nothing when it never fires.
+    fallback: true,
+  },
+  'claude-sonnet-5': {
+    label: 'Claude Sonnet 5',
+    note: 'Close to Opus for a third of the price.',
+    params: { output_config: { effort: 'medium' } },
+  },
+  'claude-haiku-4-5': {
+    label: 'Claude Haiku 4.5',
+    note: 'Cheapest — a couple of cents. Noticeably plainer prose.',
+    // Adaptive thinking isn't supported here; Haiku takes an explicit budget.
+    params: { thinking: { type: 'enabled', budget_tokens: 4000 } },
+  },
+};
+const DEFAULT_AI_MODEL = 'claude-opus-5';
+
+function normalizeAiModel(value) {
+  return value in AI_MODELS ? value : DEFAULT_AI_MODEL;
+}
+
+/**
+ * One Claude call, with the per-model request differences handled here so the
+ * tailoring features can just ask for text.
+ */
+async function askClaude({ system, user, maxTokens }) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error(
+      'No ANTHROPIC_API_KEY in desktop/.env — get one at console.anthropic.com and restart the app.'
+    );
+  }
+  const modelId = normalizeAiModel(getSettings().aiModel);
+  const model = AI_MODELS[modelId];
+  const Anthropic = require('@anthropic-ai/sdk');
+  const anthropic = new Anthropic();
+
+  const request = {
+    model: modelId,
+    max_tokens: maxTokens,
+    ...model.params,
+    system,
+    messages: [{ role: 'user', content: user }],
+  };
+
+  const response = model.fallback
+    ? await anthropic.beta.messages.create({
+        ...request,
+        betas: ['server-side-fallback-2026-07-01'],
+        fallbacks: 'default',
+      })
+    : await anthropic.messages.create(request);
+
+  if (response.stop_reason === 'refusal') {
+    throw new Error('The model declined this request — try again, or switch models in Settings.');
+  }
+  // Thinking blocks ride along in the same array and must not reach the page.
+  return response.content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n');
+}
+
+// Shared by both tailoring features: the listing plus the profile it must
+// draw from, and nothing else.
+async function tailorContext(listingId) {
+  if (!getSupabase()) throw new Error('Supabase not configured');
+  const [{ data: listing, error: lErr }, chunks] = await Promise.all([
+    getSupabase()
+      .from('job_listings')
+      .select('company, role, location, description')
+      .eq('id', listingId)
+      .single(),
+    fetchProfile(),
+  ]);
+  if (lErr) throw new Error(lErr.message);
+  if (!chunks.length) {
+    throw new Error('Your profile is empty — add experience/skills chunks via the Profile button first.');
+  }
+  return {
+    listing,
+    profile: chunks.map((c) => `[${c.kind}] ${c.title}\n${c.content}`).join('\n\n'),
+  };
+}
+
+function listingBlock(listing, missingNote) {
+  return (
+    `JOB LISTING:\n${listing.role} at ${listing.company}` +
+    (listing.location ? ` (${listing.location})` : '') +
+    (listing.description ? `\n\n${listing.description}` : `\n\n${missingNote}`)
+  );
+}
+
 const TAILOR_SYSTEM = `You write tailored resumes. You are given a candidate's
 profile (chunks of real experience, education, skills, projects) and one job
 listing. Produce a one-page resume in Markdown, tailored to that job:
@@ -465,60 +572,67 @@ listing. Produce a one-page resume in Markdown, tailored to that job:
 - If the job asks for something important the profile cannot support, add a
   final "Gaps to address" note listing it (outside the resume proper).`;
 
+// A cover letter fails differently from a resume. A resume that's merely
+// generic is still usable; a generic cover letter actively costs you the
+// application, because every reader has seen "I am writing to express my
+// strong interest" a thousand times. So this prompt spends most of its length
+// banning the specific tics rather than describing the format.
+const COVER_SYSTEM = `You write cover letters. You are given a candidate's
+profile (chunks of real experience, education, skills, projects) and one job
+listing. Write the letter that candidate would send for that job.
+
+Hard rules:
+- NEVER invent employers, titles, dates, degrees, certifications, tools,
+  metrics, or accomplishments that are not in the profile. Reframing what is
+  there is fine; fabricating is not. If the profile can't support a claim the
+  job asks for, leave it out rather than inventing it.
+- Do not claim feelings or motivations the profile gives no evidence for —
+  no lifelong passion for an industry the candidate has never worked in.
+
+Write it like a person:
+- 200-300 words, four short paragraphs at most. Longer reads as padding.
+- Open with a specific reason this candidate fits this job. Never open with
+  "I am writing to", "I am excited to apply", or the job title restated.
+- Every claim of ability must be attached to something concrete from the
+  profile — a system worked on, a problem solved, a tool actually used.
+- Name the company and something true about the role from the listing, so it
+  cannot be mistaken for a letter sent to anyone else.
+- No superlatives about the company ("industry-leading", "innovative"), no
+  "I believe I would be a great fit", no restating the resume line by line.
+- Plain confident tone. Contractions are fine. Short sentences.
+
+Output only the letter body in Markdown, starting with "Dear ..." (use
+"Dear Hiring Manager" if the listing names nobody) and ending with a sign-off
+above a name placeholder. No preamble, no notes, no explanation.`;
+
 async function tailorResume(listingId) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error(
-      'No ANTHROPIC_API_KEY in desktop/.env — get one at console.anthropic.com and restart the app.'
-    );
-  }
-  if (!getSupabase()) throw new Error('Supabase not configured');
-
-  const [{ data: listing, error: lErr }, chunks] = await Promise.all([
-    getSupabase()
-      .from('job_listings')
-      .select('company, role, location, description')
-      .eq('id', listingId)
-      .single(),
-    fetchProfile(),
-  ]);
-  if (lErr) throw new Error(lErr.message);
-  if (!chunks.length) {
-    throw new Error('Your profile is empty — add experience/skills chunks via the Profile button first.');
-  }
-
-  const profile = chunks
-    .map((c) => `[${c.kind}] ${c.title}\n${c.content}`)
-    .join('\n\n');
-
-  const Anthropic = require('@anthropic-ai/sdk');
-  const anthropic = new Anthropic();
-  // Haiku 4.5: a few cents per resume; thinking uses the budget_tokens form
-  // (adaptive is not supported on Haiku).
-  const response = await anthropic.messages.create({
-    model: 'claude-haiku-4-5',
-    max_tokens: 16000,
-    thinking: { type: 'enabled', budget_tokens: 4000 },
+  const { listing, profile } = await tailorContext(listingId);
+  return askClaude({
     system: TAILOR_SYSTEM,
-    messages: [
-      {
-        role: 'user',
-        content:
-          `CANDIDATE PROFILE:\n${profile}\n\n` +
-          `JOB LISTING:\n${listing.role} at ${listing.company}` +
-          (listing.location ? ` (${listing.location})` : '') +
-          (listing.description
-            ? `\n\n${listing.description}`
-            : '\n\n(no description stored — tailor from the title; note this limitation in the Gaps section)'),
-      },
-    ],
+    maxTokens: 16000,
+    user:
+      `CANDIDATE PROFILE:\n${profile}\n\n` +
+      listingBlock(
+        listing,
+        '(no description stored — tailor from the title; note this limitation in the Gaps section)'
+      ),
   });
-  if (response.stop_reason === 'refusal') {
-    throw new Error('The model declined this request — try again.');
-  }
-  return response.content
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n');
+}
+
+async function tailorCover(listingId) {
+  const { listing, profile } = await tailorContext(listingId);
+  return askClaude({
+    system: COVER_SYSTEM,
+    // Smaller ceiling than the resume: the letter is short, but thinking is
+    // billed against the same budget, so it still needs real headroom.
+    maxTokens: 8000,
+    user:
+      `CANDIDATE PROFILE:\n${profile}\n\n` +
+      listingBlock(
+        listing,
+        '(no description stored — write from the job title alone and keep claims general rather than guessing at requirements)'
+      ),
+  });
 }
 
 async function fetchSearches() {
@@ -832,6 +946,14 @@ if (!gotLock) {
       // So the pay filter can say "run the migration" rather than sitting
       // there looking broken when no listing has a salary.
       salaryColumns: hasSalaryColumns,
+      // Labels and costs for the model picker; the renderer shouldn't carry a
+      // second copy of the model list.
+      aiModels: Object.entries(AI_MODELS).map(([id, m]) => ({
+        id,
+        label: m.label,
+        note: m.note,
+      })),
+      hasApiKey: !!process.env.ANTHROPIC_API_KEY,
       version: app.getVersion(),
       configPath: loadedEnvFrom ?? '(no .env found)',
       userDataPath: app.getPath('userData'),
@@ -856,6 +978,7 @@ if (!gotLock) {
       }
       if (key === 'scoringTarget') value = normalizeTarget(value);
       if (key === 'locationWeight') value = normalizeWeight(value);
+      if (key === 'aiModel') value = normalizeAiModel(value);
       saveSettings({ [key]: value });
       if (key === 'pollMinutes') {
         schedulePoll();
@@ -1117,6 +1240,7 @@ if (!gotLock) {
       return fetchProfile();
     });
     ipcMain.handle('tailor-resume', (_e, id) => tailorResume(id));
+    ipcMain.handle('tailor-cover', (_e, id) => tailorCover(id));
     ipcMain.handle('save-text', async (_e, { content, defaultName }) => {
       const { canceled, filePath } = await dialog.showSaveDialog(win, {
         defaultPath: defaultName,

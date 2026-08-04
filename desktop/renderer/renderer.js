@@ -52,6 +52,7 @@ const state = {
     followUpDays: 10,
     scoringTarget: 'entry',
     locationWeight: 0,
+    aiModel: 'claude-opus-5',
   },
   toast: null, // { label, undoFn }
   followUpsOnly: false,
@@ -938,14 +939,15 @@ function screenDetail() {
   screen.append(body);
 
   const foot = el('div', 'foot foot-grid');
-  const top = el('div', 'grid2');
+  const top = el('div', 'grid3');
   top.append(
     btn('Open posting', 'btn btn-lg btn-acc', {
       iconName: 'ext',
       disabled: !l.url,
       onClick: () => l.url && window.api.openUrl(l.url),
     }),
-    btn('Tailor resume', 'btn btn-lg', { iconName: 'file', onClick: () => startTailor(l) })
+    btn('Resume', 'btn btn-lg', { iconName: 'file', title: 'Tailored resume', onClick: () => startTailor(l, 'resume') }),
+    btn('Letter', 'btn btn-lg', { iconName: 'note', title: 'Cover letter', onClick: () => startTailor(l, 'cover') })
   );
   const bottom = el('div', 'grid3');
   const view = viewOf(l);
@@ -962,28 +964,47 @@ function screenDetail() {
 }
 
 // ---------- screen: tailor ----------
-function startTailor(listing) {
-  state.tailor = { listing, step: 1, text: '', error: '' };
+// Resume and cover letter are the same flow over the same inputs — one screen
+// parameterised by kind, rather than two that drift apart.
+const TAILOR_KINDS = {
+  resume: {
+    title: 'Tailored resume',
+    steps: ['Profile read', 'Listing parsed', 'Draft written'],
+    filePrefix: 'resume',
+    call: (id) => window.api.tailorResume(id),
+  },
+  cover: {
+    title: 'Cover letter',
+    steps: ['Profile read', 'Listing parsed', 'Letter written'],
+    filePrefix: 'cover-letter',
+    call: (id) => window.api.tailorCover(id),
+  },
+};
+
+function startTailor(listing, kind = 'resume') {
+  state.tailor = { listing, kind, step: 1, text: '', error: '' };
   go('tailor');
-  window.api
-    .tailorResume(listing.id)
+  const started = state.tailor;
+  TAILOR_KINDS[kind]
+    .call(listing.id)
     .then((text) => {
-      if (state.tailor?.listing.id === listing.id) {
+      // Ignore a response the user has already navigated away from.
+      if (state.tailor === started) {
         state.tailor.text = text;
         state.tailor.step = 3;
         render();
       }
     })
     .catch((e) => {
-      if (state.tailor?.listing.id === listing.id) {
+      if (state.tailor === started) {
         state.tailor.error = e.message;
         render();
       }
     });
   // Second step lights up once the request is in flight.
   setTimeout(() => {
-    if (state.tailor && !state.tailor.text && state.tailor.step < 2) {
-      state.tailor.step = 2;
+    if (state.tailor === started && !started.text && started.step < 2) {
+      started.step = 2;
       render();
     }
   }, 700);
@@ -991,20 +1012,25 @@ function startTailor(listing) {
 
 function screenTailor() {
   const t = state.tailor;
+  const kind = TAILOR_KINDS[t.kind] ?? TAILOR_KINDS.resume;
   const screen = el('div', 'screen');
+  const model = (state.settings.aiModels ?? []).find((m) => m.id === state.settings.aiModel);
 
   const hdr = el('div', 'hdr');
-  hdr.append(backLink('Listing', () => go('detail')), el('div', 'hdr-right', 'Claude Haiku · ~2¢'));
+  hdr.append(
+    backLink('Listing', () => go('detail')),
+    el('div', 'hdr-right', model?.label ?? 'Claude')
+  );
   screen.append(hdr);
 
   const body = el('div', 'scroll pad');
-  body.append(el('div', 'hdr-title', 'Tailored resume'));
+  body.append(el('div', 'hdr-title', kind.title));
   body.append(
     el('div', 'sub-line', `${t.listing.role} — ${t.listing.company} · ${state.profile.length || '—'} profile entries`)
   );
 
   const prog = el('div', 'progress');
-  ['Profile read', 'Listing parsed', 'Draft written'].forEach((label, i) => {
+  kind.steps.forEach((label, i) => {
     prog.append(el('div', 'pipe-cell' + (t.step > i ? ' on' : ''), label));
   });
   body.append(prog);
@@ -1024,7 +1050,7 @@ function screenTailor() {
       disabled: !t.text,
       onClick: () => {
         const name =
-          `resume-${t.listing.company}-${t.listing.role}`
+          `${kind.filePrefix}-${t.listing.company}-${t.listing.role}`
             .toLowerCase()
             .replace(/[^a-z0-9]+/g, '-')
             .replace(/(^-|-$)/g, '') + '.md';
@@ -1799,6 +1825,28 @@ function screenSettings() {
 
   // --- scoring ---
   for (const node of scoringSection()) body.append(node);
+
+  // --- writing ---
+  // The only paid part of the app, so what it costs is stated next to the
+  // choice rather than left to be discovered on a bill.
+  body.append(el('div', 'set-head', 'Resume & cover letter'));
+  const models = s.aiModels ?? [];
+  if (!s.hasApiKey) {
+    body.append(
+      el('div', 'note', 'No ANTHROPIC_API_KEY in desktop/.env — tailoring is unavailable until one is set.')
+    );
+  }
+  if (models.length) {
+    const current = models.find((m) => m.id === s.aiModel);
+    body.append(settingRow('Model', current?.note, el('div')));
+    const modelChips = el('div', 'chips');
+    for (const m of models) {
+      const chip = el('button', 'chip' + (s.aiModel === m.id ? ' on' : ''), m.label);
+      chip.addEventListener('click', () => saveSetting('aiModel', m.id));
+      modelChips.append(chip);
+    }
+    body.append(modelChips);
+  }
 
   // --- behaviour ---
   body.append(el('div', 'set-head', 'Behaviour'));

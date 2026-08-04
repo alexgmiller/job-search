@@ -127,7 +127,7 @@ Closing the window minimizes to the tray so notifications keep working.
 - **Detail view**: clicking a listing opens it in-app rather than launching
   a browser — full description, fit score with its reasoning, and every
   action (Open posting, 👁 Seen, Applied ✓, Dismiss, Restore, status
-  pipeline, notes) plus **📄 Tailor resume** rendered inline. This is what
+  pipeline, notes) plus **Resume** and **Letter** rendered inline. This is what
   makes widget mode usable, since list cards there are too narrow for
   per-card buttons.
 - **Undo**: every keep/apply/dismiss/restore (and bulk action) offers a
@@ -159,9 +159,33 @@ Closing the window minimizes to the tray so notifications keep working.
   detection. The scraper **fit-scores** each new listing
   against your profile with free keyword matching — no API, badges are
   relative rather than absolute (hover for matched terms; New/Seen sort
-  best-first). The **📄 Tailor** button generates a Markdown resume built
-  only from your profile chunks via Claude Haiku (a few cents per click;
-  needs `ANTHROPIC_API_KEY` in `desktop/.env`).
+  best-first). **Resume** and **Letter** on a listing's detail screen
+  generate a tailored resume or a cover letter, built only from your profile
+  chunks (needs `ANTHROPIC_API_KEY` in `desktop/.env`).
+
+### Cover letters
+
+Same inputs as the resume tailor, different failure mode. A resume that
+reads as generic is still usable; a generic cover letter costs you the
+application, because every reader has seen "I am writing to express my
+strong interest" a thousand times. So most of that prompt is spent banning
+specific tics — no opening on "I am writing to", no company superlatives, no
+"I believe I'd be a great fit", no claimed passion the profile can't
+evidence — and requiring every claim of ability to attach to something
+concrete: a system worked on, a tool actually used.
+
+The no-fabrication rule is the part worth trusting but verifying. Checked by
+pulling every number and proper noun out of generated letters and matching
+them against the profile: across the letters tested, **zero unsupported
+figures and zero invented tools or employers**. The letters also volunteer
+their gaps ("I don't have SAML or OAuth troubleshooting experience yet, and
+I'd rather say that than imply otherwise") rather than papering over them.
+
+**Settings → Resume & cover letter** picks the model, with the cost stated
+next to each: Opus 5 (best prose, ~15¢), Sonnet 5, or Haiku 4.5 (a couple of
+cents, noticeably plainer). The request shape genuinely differs between them
+— Haiku takes a fixed thinking budget, the 5 series rejects that outright
+and thinks adaptively — so it's handled once, next to the model list.
 
 Profile entries are edited as structured fields (✎ on an entry, or
 double-click its text): job title, company, location, start/end month with
